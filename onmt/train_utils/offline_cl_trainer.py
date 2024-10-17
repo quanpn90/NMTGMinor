@@ -2392,19 +2392,18 @@ class OfflineCLTrainer(object):
 
             return model
 
+        opt = self.opt
+        # extract the paths
+        path = os.path.dirname(opt.save_model)
+
+        # find
+        dataset_id = opt.dataset_index
+        existed_save_files = glob.glob(path + "/" + str(dataset_id) + "/" + "*.pt")
+
+        models = existed_save_files
+        models = models
+        n_models = len(models)
         try:
-
-            opt = self.opt
-            # extract the paths
-            path = os.path.dirname(opt.save_model)
-
-            # find
-            dataset_id = opt.dataset_index
-            existed_save_files = glob.glob(path + "/" + str(dataset_id) + "/" + "*.pt")
-
-            models = existed_save_files
-            models = models
-            n_models = len(models)
             i = 0
             # checkpoint for main model
             checkpoint = torch.load(models[0], map_location=lambda storage, loc: storage)
@@ -2488,7 +2487,7 @@ class OfflineCLTrainer(object):
 
         except Exception as e:
 
-            # sys.stdout, sys.stderr = saved_stdout, saved_stderr
+            sys.stdout, sys.stderr = saved_stdout, saved_stderr
             self.print("Error when processing the checkpoint", models[i])
             exit()
 
