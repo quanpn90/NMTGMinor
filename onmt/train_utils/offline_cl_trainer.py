@@ -2489,7 +2489,7 @@ class OfflineCLTrainer(object):
 
             sys.stdout, sys.stderr = saved_stdout, saved_stderr
             self.print("Error when processing the checkpoint", models[i])
-            exit()
+            raise e
 
         # save_checkpoint = {
         #     'model': model_state_dict,
