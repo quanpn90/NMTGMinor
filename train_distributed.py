@@ -792,6 +792,8 @@ if __name__ == "__main__":
         print("WARNING: You have a CUDA device, should run with -gpus 0")
 
     if len(opt.gpus) == 1 or opt.finalize_only:
+        gpu_list = opt.gpus
+        opt.gpus = [gpu_list[0]]
         main(0, opt)
     else:
         torch.multiprocessing.spawn(main, args=(opt, ),
