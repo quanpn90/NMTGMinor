@@ -287,10 +287,13 @@ class OCLTrainer(object):
         if opt.load_from:
             checkpoint = torch.load(opt.load_from, map_location=lambda storage, loc: storage)
 
-            try:
-                self.model.load_state_dict(checkpoint['model'])
-            except RuntimeError as e:
-                self.model.load_state_dict(checkpoint['model'], strict=True)
+            if opt.finalize_only:
+                self.print("[INFO] Finalizing only ... skipping loading parameters")
+            else:
+                try:
+                    self.model.load_state_dict(checkpoint['model'])
+                except RuntimeError as e:
+                    self.model.load_state_dict(checkpoint['model'], strict=True)
 
         self.agem_training = False
         if opt.agem_training:

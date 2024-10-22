@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <project version="4">
-  <component name="PublishConfigData" autoUpload="On explicit save action" serverName="i13hpc1.ira.uka.de" confirmBeforeUploading="false" confirmBeforeDeletion="false" autoUploadExternalChanges="true" showAutoUploadSettingsWarning="false">
+  <component name="PublishConfigData" autoUpload="On explicit save action" serverName="horeka" confirmBeforeUploading="false" confirmBeforeDeletion="false" autoUploadExternalChanges="true" showAutoUploadSettingsWarning="false">
     <option name="confirmBeforeDeletion" value="false" />
     <option name="confirmBeforeUploading" value="false" />
     <serverData>
@@ -14,7 +14,7 @@
       <paths name="horeka">
         <serverdata>
           <mappings>
-            <mapping local="$PROJECT_DIR$" web="/" />
+            <mapping deploy="/home/hk-project-pai00008/gw1254/NMTGMinor" local="$PROJECT_DIR$" web="/" />
           </mappings>
         </serverdata>
       </paths>
