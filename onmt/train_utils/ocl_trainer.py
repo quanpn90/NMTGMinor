@@ -625,7 +625,7 @@ class OCLTrainer(object):
             'itr': itr_state_dict,
             'optim': optim_state_dict,
             'scaler': self.grad_scaler.state_dict() if self.grad_scaler is not None else None,
-            'reservoir': self.reservoir.state_dict()
+            'reservoir': self.reservoir.state_dict() if self.reservoir is not None else None
         }
 
         file_name = '%s_epoch%.2f.round%d' % (opt.save_model, epoch, round)
