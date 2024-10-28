@@ -625,7 +625,7 @@ class OCLTrainer(object):
             'itr': itr_state_dict,
             'optim': optim_state_dict,
             'scaler': self.grad_scaler.state_dict() if self.grad_scaler is not None else None,
-            'reservoir': self.reservoir.state_dict()
+            'reservoir': self.reservoir.state_dict() if self.reservoir is not None else None
         }
 
         file_name = '%s_epoch%.2f.round%d' % (opt.save_model, epoch, round)
@@ -634,7 +634,7 @@ class OCLTrainer(object):
             torch.save(checkpoint, file_name)
 
             # check the save directory here
-            checkpoint_dir = os.path.dirname(opt.save_model)
+            checkpoint_dir = os.path.dirname(opt.save_model) 
             existed_save_files = checkpoint_paths(checkpoint_dir)
             for save_file in existed_save_files[opt.keep_save_files:]:
                 print(" * Deleting old save file %s ...." % save_file)
@@ -643,7 +643,7 @@ class OCLTrainer(object):
     def eval(self, data):
 
         self.print("[INFO] Running cross-entropy evaluation...", flush=True)
-        opt = self.opt
+        opt = self.opt 
 
         rank = self.rank
         world_size = self.world_size
@@ -1303,24 +1303,25 @@ class OCLTrainer(object):
                 value = 1 - valid_accuracy
             self.save(epoch, dataset_id, value)
 
-            total_per_dataset = self.reservoir.get_stats()
+            if self.reservoir is not None:
+                total_per_dataset = self.reservoir.get_stats()
 
-            # some stupid code to grab the memory statistics
-            n_dataset = len(train_data)
-            _tensor = torch.zeros((n_dataset, )).cuda()
-            for _dataset_id in total_per_dataset:
-                _tensor[_dataset_id] = total_per_dataset[_dataset_id]
+                # some stupid code to grab the memory statistics
+                n_dataset = len(train_data)
+                _tensor = torch.zeros((n_dataset, )).cuda()
+                for _dataset_id in total_per_dataset:
+                    _tensor[_dataset_id] = total_per_dataset[_dataset_id]
 
-            if self.world_size > 1:
-                self.all_reduce(_tensor, op=dist.ReduceOp.SUM, group=self.group)
+                if self.world_size > 1:
+                    self.all_reduce(_tensor, op=dist.ReduceOp.SUM, group=self.group)
 
-            self.print("Memory statistics:")
-            _sum = torch.sum(_tensor).item()
-            for dataset_id in total_per_dataset:
-                prob = _tensor[dataset_id].item() / _sum
-                self.print("Dataset ", dataset_id, _tensor[dataset_id].item(),
-                           "samples", f"{prob:.0%}")
-                self.print("")
+                self.print("Memory statistics:")
+                _sum = torch.sum(_tensor).item()
+                for dataset_id in total_per_dataset:
+                    prob = _tensor[dataset_id].item() / _sum
+                    self.print("Dataset ", dataset_id, _tensor[dataset_id].item(),
+                               "samples", f"{prob:.0%}")
+                    self.print("")
 
         return total_loss / total_words
 

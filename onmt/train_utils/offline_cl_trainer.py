@@ -443,15 +443,21 @@ class OfflineCLTrainer(object):
         else:
             self.fisher_info = None
 
-        self.print("[INFO] Creating Reservoir ...")
 
         # TODO: add option for reservoir size
 
         reservoir_size = opt.reservoir_size
         if reservoir_size > 0:
+            self.print("[INFO] Creating Reservoir ...")
             self.reservoir = Reservoir(max_samples=reservoir_size,
                                        update_method="reservoir_sampling",
                                        unit="sample")
+
+            if opt.finalize_only and self.reservoir is not None:
+                if opt.dataset_index > 1:
+                    assert opt.load_from.endswith("final.pt"), \
+                        ("[ERROR] Reservoir is not None and dataset index > 1. "
+                         "Checkpoint required to load the reservoir data!")
 
             if opt.load_from.endswith("final.pt"):
                 reservoir_data = checkpoint['reservoir'] if 'reservoir' in checkpoint else None
@@ -470,7 +476,8 @@ class OfflineCLTrainer(object):
                         self.print("Dataset ", _d, ":", n_samples,
                                    "samples", f"{prob:.0%}")
                         self.print("")
-
+                elif self.reservoir is None and reservoir_data is None:
+                    self.print("[WARNING] Can't find reservoir data in the checkpoint")
 
         else:
             self.reservoir = None
@@ -2489,7 +2496,8 @@ class OfflineCLTrainer(object):
 
             sys.stdout, sys.stderr = saved_stdout, saved_stderr
             self.print("Error when processing the checkpoint", models[i])
-            raise e
+            exit()
+            # raise e
 
         # save_checkpoint = {
         #     'model': model_state_dict,
@@ -3129,23 +3137,28 @@ class OfflineCLTrainer(object):
             itr_progress = None
             resume = False
 
-        self.average_checkpoints()
-        self.populate_reservoir(train_data, dataset_id)
+        if max_epoch == 0:
+            assert opt.finalize_only, "No training is done. Use --finalize-only."
 
-        # evaluate the last time
-        valid_loss, valid_accuracy = self.eval(valid_data, dataset_id)
-        valid_ppl = math.exp(min(valid_loss, 100))
-        self.print('[INFO] Validation perplexity: %g' % valid_ppl)
-        self.print('[INFO] Validation accuracy: %g percent' % (100 * valid_accuracy))
-        if opt.save_metrics in ['ppl', 'perplexity']:
-            value = valid_ppl
-        elif opt.save_metrics == "memory":
-            if isinstance(self.model, torch.nn.parallel.DistributedDataParallel):
-                value = self.model.module.choose_best_epoch_by
+        if opt.finalize_only:
+
+            self.average_checkpoints()
+            self.populate_reservoir(train_data, dataset_id)
+
+            # evaluate the last time
+            valid_loss, valid_accuracy = self.eval(valid_data, dataset_id)
+            valid_ppl = math.exp(min(valid_loss, 100))
+            self.print('[INFO] Validation perplexity: %g' % valid_ppl)
+            self.print('[INFO] Validation accuracy: %g percent' % (100 * valid_accuracy))
+            if opt.save_metrics in ['ppl', 'perplexity']:
+                value = valid_ppl
+            elif opt.save_metrics == "memory":
+                if isinstance(self.model, torch.nn.parallel.DistributedDataParallel):
+                    value = self.model.module.choose_best_epoch_by
+                else:
+                    value = self.model.choose_best_epoch_by
             else:
-                value = self.model.choose_best_epoch_by
-        else:
-            value = 1 - valid_accuracy
-        self.save(-1, dataset_id, value, final=True)
+                value = 1 - valid_accuracy
+            self.save(-1, dataset_id, value, final=True)
 
 
