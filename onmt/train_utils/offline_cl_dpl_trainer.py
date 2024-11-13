@@ -180,7 +180,28 @@ def all_reduce_and_rescale_tensors(tensors, rescale_denom=1,
             all_reduce_buffer()
 
 
-class OfflineCLTrainer(object):
+# the main idea of Primal Dual learning:
+# sample data from dataset or buffer
+# if data comes from buffer:
+#
+
+class OfflineCL_DPL_Trainer(object):
+    # dual primal lagrange optimization
+    # sample for either dataset or buffer
+    # if sample from dataset: compute loss normally and backward
+    # if sample from buffer: retrieve the lambda variable (good thing we save the dataset :))
+    # variation 1: lambda is per task (so lambda size is number of task?)
+    # variation 2: lambda is per example (each example in the buffer needs a lambda, so we maintain one for buffer size)
+
+
+    # loss = lambda * (loss - epsilon)
+    # extend the loss function with lambda is good idea :)
+    # we need to find epsilon from a normal experiment. Either take the average or the lowest value.
+
+    # after the gradient accumulation step and update, we do:
+    # estimate the constraint slacks on the previous epoch by:
+    # taking the average of the difference between the loss and epsilon (note: for language model its the sum of tokens)]
+    # apply gradient descent on lambda :) Maybe adam works?
 
     def __init__(self, device, dicts, opt, constants=None, setup_optimizer=True):
         """
@@ -307,16 +328,6 @@ class OfflineCLTrainer(object):
             self.mem_model = mem_model
             self.mem_model.load_state_dict(self.model.state_dict())
 
-        # dual prime lagragian
-        self.dpl_training = False
-        if opt.dpl_training:
-            self.dpl_training = True
-
-            # what should we do for this one?
-            # we need to hold the lagrangian weights (lambdas) for each sample in the memory buffer
-            # when we add new samples to the memory -> reset the lagrangian
-            # but what should the initial values be?
-
         if self.cuda:
             self.loss_function = self.loss_function.cuda(device=self.device)
             self.model = self.model.cuda(device=self.device)
@@ -399,8 +410,6 @@ class OfflineCLTrainer(object):
                 self.mem_optim = onmt.Optim(opt)
                 self.mem_optim.set_parameters(self.mem_model.parameters(), flattened=opt.flatten_parameters)
 
-
-
             if self.is_main():
                 print("[INFO] Optimizer: ", self.optim.optimizer)
 
@@ -463,11 +472,7 @@ class OfflineCLTrainer(object):
             self.print("[INFO] Creating Reservoir ...")
             self.reservoir = Reservoir(max_samples=reservoir_size,
                                        update_method="reservoir_sampling",
-                                       unit="sample", weighting=opt.dpl_training)
-
-            if self.dpl_training:
-                self.lambda_optim = onmt.Optim(opt)
-                self.lambda_optim.set_parameters(self.reservoir.parameters())
+                                       unit="sample")
 
             if opt.finalize_only and self.reservoir is not None:
                 if opt.dataset_index > 1:
@@ -854,8 +859,6 @@ class OfflineCLTrainer(object):
 
         while not (_data_iterator.end_of_epoch() and not rehearse) :
 
-            lagrangian_weights = None
-
             if not rehearse or opt.reservoir_size <= 0:
                 samples = next(_epoch_iterator)
 
@@ -871,13 +874,8 @@ class OfflineCLTrainer(object):
                     # we start to rehearse immediately
                     rehearse = True  # so that the next one is to rehearse
             else:
-                rehearsed_data = self.reservoir.sample()
-
-                rehearsed_dataset_ids, rehearsed_indices = rehearsed_data[0], rehearsed_data[1]
-
-                if opt.dpl_training:
-                    lagrangian_weights = rehearsed_data[2]
-
+                rehearsed_dataset_ids, rehearsed_indices = self.reservoir.sample()
+                # samples = train_data[rehearsed_dataset_id].get_batch_from_indices(rehearsed_indices)
                 samples = get_batch_from_multidataset(train_data, rehearsed_dataset_ids, rehearsed_indices)
 
                 batch = prepare_sample(samples, device=self.device)
@@ -932,12 +930,16 @@ class OfflineCLTrainer(object):
                         outputs['tgt_mask'] = tgt_mask
 
                         ctc_only = False
-                        loss_dict = self.loss_function(outputs, targets, model=self.model,
-                                                       lagrangian_weights=lagrangian_weights,
-                                                       loss_constraint=opt.dpl_epsilon)
-                        loss_data = loss_dict['data']
-                        loss = loss_dict['loss']  # a little trick to avoid gradient overflow with fp16
-                        full_loss = loss
+                        if outputs["hidden"] != None:
+                            loss_dict = self.loss_function(outputs, targets, model=self.model)
+                            loss_data = loss_dict['data']
+                            loss = loss_dict['loss']  # a little trick to avoid gradient overflow with fp16
+                            full_loss = loss
+                        else:
+                            ctc_only = True
+                            loss_data = 0
+                            loss = None
+                            full_loss = 0
 
                         if opt.ctc_loss > 0.0:
                             ctc_loss = outputs['ctc_loss']
@@ -1014,6 +1016,9 @@ class OfflineCLTrainer(object):
                             contrastive_loss = outputs['contrastive_loss']
                             full_loss = full_loss + opt.contrastive_loss_coeff * contrastive_loss
                             report_contrastive_loss.add_(contrastive_loss.item())
+
+                        # correct, total = loss_dict['correct'], loss_dict['total']
+                        # optimizer = self.optim.optimizer
 
                     # grad scaler has to be done outside of the autocast
                     if self.grad_scaler is not None:
@@ -1134,15 +1139,6 @@ class OfflineCLTrainer(object):
                 else:
                     self.optim.step(scaler=None)
                 self.optim.zero_grad(set_to_none=True if self.opt.fsdp else not opt.true_zero_grad)
-
-                if opt.dpl_training:
-
-                    # TODO:
-                    # synchronize the gradients for the lambdas (weights in buffers)
-                    # update lambdas using Adam (probably we should also use the same learning rate/schedule?)
-                    # reset the gradient for the lambdas
-                    pass
-
                 counter = 0
                 num_accumulated_words.zero_()
                 num_accumulated_sents.zero_()

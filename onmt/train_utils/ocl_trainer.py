@@ -840,6 +840,7 @@ class OCLTrainer(object):
 
                 if not rehearse or opt.reservoir_size <= 0:
                     samples = next(_epoch_iterator)
+                    lagrangian_weights = None
 
                     # sample is also added to the reservoir here
                     batch = prepare_sample(samples, device=self.device, dataset_id=dataset_id,
@@ -856,9 +857,10 @@ class OCLTrainer(object):
                         rehearse = True  # so that the next one is to rehearse
                 else:
                     # print("rehearsing from memory....", flush=True)
-                    rehearsed_dataset_ids, rehearsed_indices = self.reservoir.sample()
+                    rehearsed_dataset_ids, rehearsed_indices, lagrangian_weights = self.reservoir.sample()
                     # samples = train_data[rehearsed_dataset_id].get_batch_from_indices(rehearsed_indices)
-                    samples = get_batch_from_multidataset(train_data, rehearsed_dataset_ids, rehearsed_indices)
+                    samples = get_batch_from_multidataset(train_data, rehearsed_dataset_ids,
+                                                          rehearsed_indices)
 
                     batch = prepare_sample(samples, device=self.device)
 
@@ -916,7 +918,8 @@ class OCLTrainer(object):
 
                             ctc_only = False
                             if outputs["hidden"] != None:
-                                loss_dict = self.loss_function(outputs, targets, model=self.model)
+                                loss_dict = self.loss_function(outputs, targets,
+                                                               model=self.model, lagrangian_weights=lagrangian_weights)
                                 loss_data = loss_dict['data']
                                 loss = loss_dict['loss']  # a little trick to avoid gradient overflow with fp16
                                 full_loss = loss
@@ -2534,7 +2537,7 @@ class OCLTrainer(object):
 
                 return
 
-        self.start_time = time.time()
+        self.start_time = time.time()   
 
         for epoch in range(start_epoch, start_epoch + opt.epochs):
             self.print('')

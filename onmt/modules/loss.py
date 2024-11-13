@@ -57,17 +57,22 @@ class CrossEntropyLossBase(_Loss):
             self.softmax_xentropy = None
             self.fast_xentropy = False
 
-    def _compute_loss(self, logits, targets, vocab_mask=None, softmaxed=False):
+    def _compute_loss(self, logits, targets,
+                      softmaxed=False,
+                      loss_weights=None, loss_constraint=0):
         """
         :param logits: T x B x V or B x T x V tensor (output of decoder)
         :param targets: T x B x V or B x T target tensor
-        :param vocab_mask V: bool tensor or None
+        :param softmaxed:
+        :param weights: T x B or B x T target tensor
         :return:
         """
         label_smoothing = self.label_smoothing if self.training else 0.0
 
         gtruth = targets.view(-1)  # B*T
         logits = logits.view(-1, logits.size(-1))  # B*T x V
+        if loss_weights is not None:
+            loss_weights = loss_weights.view(-1)
 
         eps_i = self.smoothing_value if self.training else 0.0
         fast_entropy = self.fast_xentropy and not softmaxed
@@ -80,6 +85,9 @@ class CrossEntropyLossBase(_Loss):
                 half_to_float = (logits.dtype == torch.float16 or logits.dtype == torch.bfloat16)
                 loss = self.softmax_xentropy(logits, gtruth, label_smoothing, self.padding_idx, half_to_float)
 
+                # apply the constraint
+                loss = loss - loss_constraint
+
                 # We need to return the loss data without masking bad positions
                 # Otherwise the values from "low" validation perplexities cannot be trusted
                 with torch.no_grad():
@@ -88,6 +96,8 @@ class CrossEntropyLossBase(_Loss):
                 # bad_loss = torch.logical_or(torch.isinf(loss), torch.isnan(loss))
                 # if bad_loss.any():
                 #     loss.masked_fill_(bad_loss, 0)
+                if loss_weights is not None:
+                    loss = loss * loss_weights
 
                 loss = loss.sum()
             else:
@@ -99,6 +109,11 @@ class CrossEntropyLossBase(_Loss):
 
                     with torch.no_grad():
                         loss_data = loss.sum().data.item()
+
+                    loss = loss - loss_constraint
+
+                    if loss_weights is not None:
+                        loss = loss * loss_weights
 
                     # bad_loss = torch.logical_or(torch.isinf(loss), torch.isnan(loss))
                     # if bad_loss.any():
@@ -194,16 +209,24 @@ class NMTLossFunc(CrossEntropyLossBase):
 
 
     def forward(self, model_outputs, targets,
-                model=None, vocab_mask=None, kl_divergence=False, target_probs=None, **kwargs):
+                model=None, vocab_mask=None, eval=False,
+                kl_divergence=False, target_probs=None,
+                lagrangian_weights=None,
+                loss_constraint=0, **kwargs):
         """
         Compute the loss. Subclass must define this method.
         Args:
             :param vocab_mask:
+            :param eval
             :param model_outputs:  a dictionary containing the predictive output from the model.
                                                       time x batch x vocab_size
                                                    or time x batch x hidden_size
             :param targets: the validate target to compare output with. time x batch
             :param model: passing the model in for necessary components
+            :param kl_divergence
+            :param target_probs
+            :param lagrangian_weights
+            :param loss_constraint
         """
 
         if kl_divergence:
@@ -215,18 +238,33 @@ class NMTLossFunc(CrossEntropyLossBase):
         logits = model_outputs['logprobs']
         mirror = self.mirror
 
+        if lagrangian_weights is not None:
+            if loss_weights.dim() == 1:
+                assert loss_weights.size(0) == targets.size(1), 'dimension mismatch between loss_weight (dim 0) and label (dim 1)'
+                loss_weights = lagrangian_weights.unsqueeze(0).expand_as(targets)
+        else:
+            loss_weights = None
+
         targets_ = targets.view(-1)
         non_pad_mask = torch.nonzero(targets_.ne(self.padding_idx)).squeeze(1)
         labels = targets_.index_select(0, non_pad_mask)
         logits = logits.view(-1, logits.size(-1)).index_select(0, non_pad_mask)
 
-        with torch.no_grad():
-            # don't need softmax, just take argmax on unnormalized probabilities
-            preds = torch.argmax(logits, dim=1)
-            correct = (preds == labels).sum().item()
-            total = labels.numel()
+        if loss_weights is not None:
+            loss_weights = loss_weights.view(-1)
 
-        loss, loss_data = self._compute_loss(logits, labels, vocab_mask=vocab_mask, softmaxed=softmaxed)
+        if eval:
+            with torch.no_grad():
+                # don't need softmax, just take argmax on unnormalized probabilities
+                preds = torch.argmax(logits, dim=1)
+                correct = (preds == labels).sum().item()
+                total = labels.numel()
+        else:
+            correct, total = 0, 0
+
+        loss, loss_data = self._compute_loss(logits, labels, vocab_mask=vocab_mask,
+                                             softmaxed=softmaxed, loss_weights=loss_weights,
+                                             loss_constraint=loss_constraint)
 
         total_loss = loss
 

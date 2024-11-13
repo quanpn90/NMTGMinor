@@ -320,3 +320,14 @@ class Hubert(nn.Module):
 
         return output_dict
 
+    def forward_barlow_twins(self, input, batch_first_output=False,
+                lang=None, atb=None,
+                vat_step=0, vat_perturb=None, vat_eps=0.001, **kwargs):
+
+        # The data has been constructed that the first dimension is padding mask
+        # 0 for tokens that are not masked, 1 for tokens that are masked
+        with torch.no_grad():
+            long_mask = input.narrow(2, 0, 1).squeeze(2).eq(0).long()
+            input = input.narrow(2, 1, input.size(2) - 1)
+
+        # now we have to do augmentation ....

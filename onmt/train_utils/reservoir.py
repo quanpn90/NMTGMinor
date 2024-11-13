@@ -31,7 +31,8 @@ class Reservoir:
         state_dict = {'data': self.data,
                       'num_observed': self.num_observed,
                       'unit': self.unit,
-                      'update_method': self.update_method}
+                      'update_method': self.update_method,
+                      'weights': self.weights}
 
         return state_dict
 
@@ -59,15 +60,29 @@ class Reservoir:
         self.num_observed = state_dict['num_observed']
         self.unit = state_dict['unit']
         self.update_method = state_dict['update_method']
+        self.weights = state_dict['weights'] if weights in state_dict else None
 
         self.get_stats_per_dataset()
+
+    def initialize_weights(self):
+        # lagrangian weights for each memory sample in the buffer
+        self.weights = nn.Parameter(torch.randn(self.max_samples))
+
+    def cuda(self):
+        if self.weights is not None:
+            self.weights.cuda()
+
+    def parameters(self):
+
+        return [self.weights]
 
     # note: samples here are measured by minibatches
     def __init__(self, max_samples=40000, update_method="reservoir_sampling",
                  unit="minibatch",
                  batch_size_frames=1,
                  batch_size_words=1,
-                 batch_size_sents=1):
+                 batch_size_sents=1,
+                 weighting=False):
 
         # default as 0
         self.total_per_dataset = defaultdict(int)
@@ -86,6 +101,10 @@ class Reservoir:
         self.batch_size_words = batch_size_words
         self.batch_size_sents = batch_size_sents
         self.stats = dict()
+
+        # TODO: initialize weights per sample if needed
+        self.weighting = weighting
+        self.weights = None
 
     # def add_sample(self, sample):
     def add_sample(self, batch, recurring=False):
@@ -225,7 +244,16 @@ class Reservoir:
                 dataset_ids = [sample[0] for sample in randomized_samples]
                 indices = [sample[1] for sample in randomized_samples]
 
-                return dataset_ids, indices
+                # TODO: generate weights
+                if self.weighting:
+
+                    lagrangian_weights = []
+                    return dataset_ids, indices, lagrangian_weights
+
+                else:
+                    lagrangian_weights = None
+                    return dataset_ids, indices
+
             else:
 
                 raise NotImplementedError
