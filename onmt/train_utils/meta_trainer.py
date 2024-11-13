@@ -439,7 +439,11 @@ class MetaOCLTrainer(object):
         if reservoir_size > 0:
             self.reservoir = Reservoir(max_samples=reservoir_size,
                                        update_method="reservoir_sampling",
-                                       unit="sample")
+                                       unit="sample",
+                                       batch_size_frames=opt.batch_size_frames,
+                                       batch_size_sents=opt.batch_size_sents,
+                                       batch_size_words=opt.batch_size_words
+                                       )
         else:
             self.reservoir = None
 

@@ -330,6 +330,8 @@ class OfflineCLTrainer(object):
             if opt.meta_learning:
                 self.proto_model = self.proto_model.cuda(device=self.device)
 
+
+
         # if self.opt.flatten_parameters:
         #     self.optim.flatten_parameters()
         #     if self.agem_training:
@@ -463,7 +465,10 @@ class OfflineCLTrainer(object):
             self.print("[INFO] Creating Reservoir ...")
             self.reservoir = Reservoir(max_samples=reservoir_size,
                                        update_method="reservoir_sampling",
-                                       unit="sample", weighting=opt.dpl_training)
+                                       unit="sample", weighting=opt.dpl_training,
+                                       batch_size_frames=opt.batch_size_frames,
+                                       batch_size_sents=opt.batch_size_sents,
+                                       batch_size_words=opt.batch_size_words)
 
             if self.dpl_training:
                 self.lambda_optim = onmt.Optim(opt)
@@ -497,6 +502,9 @@ class OfflineCLTrainer(object):
 
         else:
             self.reservoir = None
+
+        if self.cuda and self.reservoir is not None:
+            self.reservoir.cuda()
 
         print("[INFO] Process %d ready." % self.rank, flush=True)
 
@@ -932,6 +940,7 @@ class OfflineCLTrainer(object):
                         outputs['tgt_mask'] = tgt_mask
 
                         ctc_only = False
+                        self.print(lagrangian_weights)
                         loss_dict = self.loss_function(outputs, targets, model=self.model,
                                                        lagrangian_weights=lagrangian_weights,
                                                        loss_constraint=opt.dpl_epsilon)
@@ -1138,7 +1147,13 @@ class OfflineCLTrainer(object):
                 if opt.dpl_training:
 
                     # TODO:
+                    _lambda = self.reservoir.parameters()[0]
+
                     # synchronize the gradients for the lambdas (weights in buffers)
+                    self.all_reduce(_lambda.grad.data, op=dist.ReduceOp.SUM, group=self.group)
+
+                    self.lambda_optim.step()
+                    self.lambda_optim.zero_grad()
                     # update lambdas using Adam (probably we should also use the same learning rate/schedule?)
                     # reset the gradient for the lambdas
                     pass

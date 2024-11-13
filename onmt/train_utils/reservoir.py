@@ -60,17 +60,22 @@ class Reservoir:
         self.num_observed = state_dict['num_observed']
         self.unit = state_dict['unit']
         self.update_method = state_dict['update_method']
-        self.weights = state_dict['weights'] if weights in state_dict else None
+
+        weights = state_dict['weights'] if 'weights' in state_dict else None
+        if weights is not None:
+            self.weights = weights
 
         self.get_stats_per_dataset()
 
     def initialize_weights(self):
+        if not self.weighting:
+            return
         # lagrangian weights for each memory sample in the buffer
-        self.weights = nn.Parameter(torch.randn(self.max_samples))
+        self.weights = torch.nn.Parameter(torch.randn(self.max_samples))
 
     def cuda(self):
         if self.weights is not None:
-            self.weights.cuda()
+            self.weights = self.weights.cuda()
 
     def parameters(self):
 
@@ -105,6 +110,7 @@ class Reservoir:
         # TODO: initialize weights per sample if needed
         self.weighting = weighting
         self.weights = None
+        self.initialize_weights()
 
     # def add_sample(self, sample):
     def add_sample(self, batch, recurring=False):
@@ -146,6 +152,10 @@ class Reservoir:
 
                         del self.data[j]
                         self.data[j] = sample
+
+                        # reset weight for that one
+                        if self.weights is not None:
+                            self.weights.data[j].normal_(0, 1)
 
                         self.total_per_dataset[dataset_id] += len(indices)
             else:
@@ -247,7 +257,8 @@ class Reservoir:
                 # TODO: generate weights
                 if self.weighting:
 
-                    lagrangian_weights = []
+                    # not sure while the gradients don't flow back. TODO: fix this
+                    lagrangian_weights = self.weights[list(sampled_ids.keys())]
                     return dataset_ids, indices, lagrangian_weights
 
                 else:

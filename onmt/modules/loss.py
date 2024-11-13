@@ -197,6 +197,7 @@ class NMTLossFunc(CrossEntropyLossBase):
             log_probs = F.log_softmax(logits, dim=-1, dtype=torch.float32)
         else:
             log_probs = logits
+
         target_probs = F.softmax(target_logits, dim=-1, dtype=torch.float32)
 
         # print("[INFO] KL Divergence loss")
@@ -239,9 +240,13 @@ class NMTLossFunc(CrossEntropyLossBase):
         mirror = self.mirror
 
         if lagrangian_weights is not None:
-            if loss_weights.dim() == 1:
-                assert loss_weights.size(0) == targets.size(1), 'dimension mismatch between loss_weight (dim 0) and label (dim 1)'
+            if lagrangian_weights.dim() == 1:
+                assert lagrangian_weights.size(0) == targets.size(1), 'dimension mismatch between loss_weight (dim 0) and label (dim 1)'
                 loss_weights = lagrangian_weights.unsqueeze(0).expand_as(targets)
+            elif lagrangian_weights.dim() == 2:
+                assert lagrangian_weights.size(0) == targets.size(0)
+                assert lagrangian_weights.size(1) == targets.size(1)
+                loss_weights = lagrangian_weights
         else:
             loss_weights = None
 
@@ -251,7 +256,8 @@ class NMTLossFunc(CrossEntropyLossBase):
         logits = logits.view(-1, logits.size(-1)).index_select(0, non_pad_mask)
 
         if loss_weights is not None:
-            loss_weights = loss_weights.view(-1)
+            loss_weights = loss_weights.contiguous().view(-1)
+            loss_weights = loss_weights.index_select(0, non_pad_mask)
 
         if eval:
             with torch.no_grad():
@@ -262,7 +268,7 @@ class NMTLossFunc(CrossEntropyLossBase):
         else:
             correct, total = 0, 0
 
-        loss, loss_data = self._compute_loss(logits, labels, vocab_mask=vocab_mask,
+        loss, loss_data = self._compute_loss(logits, labels,
                                              softmaxed=softmaxed, loss_weights=loss_weights,
                                              loss_constraint=loss_constraint)
 
