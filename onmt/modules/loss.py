@@ -237,9 +237,11 @@ class NMTLossFunc(CrossEntropyLossBase):
         diff = loss_constraint - loss
         # why sum? basically we share lambda across the time dimension
         # each sample in the memory is weighted with lambda_i, and we just need to sum up over the time dimension
-        diff = diff.view(tgt_len, bsz).masked_fill_(pad_mask, 0).sum(dim=0, keepdim=False)
+        diff = diff.view(tgt_len, bsz).contiguous().masked_fill_(pad_mask, 0).sum(dim=0, keepdim=False)
 
-        return diff
+        count = diff.new_ones(tgt_len, bsz).masked_fill_(pad_mask, 0).sum(dim=0, keepdim=False)
+
+        return diff, count
 
 
     def forward(self, model_outputs, targets,

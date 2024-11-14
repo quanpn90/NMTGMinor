@@ -1159,13 +1159,12 @@ class OfflineCLTrainer(object):
                         _lambda = self.reservoir.parameters()[0]
                         # initialize the grad
                         _lambda.grad = _lambda.new_zeros(_lambda.size())
+                        total_count_per_mem = _lambda.new_ones(_lambda.size())
 
                         memory_batches, total = self.reservoir.get_samples(worker=self.rank, num_workers=self.world_size)
 
                         self.print("[INFO] Updating the Lambdas for Dual Primal with %d rehearsal batches ...." % total, flush=True)
 
-                        total_mem_targets = zero_tensor()
-                        total_diff = zero_tensor()
                         for memory_batch in memory_batches:
                             with maybe_no_sync_dpl():
                                 with torch.no_grad():
@@ -1199,18 +1198,26 @@ class OfflineCLTrainer(object):
                                     # we need to find the gradients that flow into the memory positions
                                     # so the trick here is to use a weight with value = 1 (
 
-                                    diff = self.loss_function.dpl_lambda_loss(outputs, targets,
+                                    diff, count = self.loss_function.dpl_lambda_loss(outputs, targets,
                                                                                    loss_constraint=lower_bound)
 
                                 # note that the sub_ here is because
                                 # the DPL paper updates lambda by adding lr * (loss - lower_bound)
-                                _lambda.grad.data[rehearsed_dataset_ids].sub_(diff.data)
+                                # _lambda.grad.data[rehearsed_dataset_ids].sub_(diff.data)
+                                index_tensor = torch.LongTensor(reservoir_ids).to(_lambda.device)
+                                _lambda.grad.data.index_add_(0, index_tensor, diff, alpha=-1)
+                                total_count_per_mem.index_add_(0, index_tensor, count, alpha=1)
                                 del diff
+                                del count
 
                         # self.all_reduce(total_diff, op=dist.ReduceOp.SUM, group=self.group)
                         # we ignore the weighted by datasize because ... its too hard
                         self.all_reduce(_lambda.grad, op=dist.ReduceOp.SUM, group=self.group)
-                        self.print('[INFO] ', _lambda.grad.data.sum(), flush=True)
+                        self.all_reduce(total_count_per_mem, op=dist.ReduceOp.SUM, group=self.group)
+
+                        # normalize
+                        _lambda.grad.data.div_(total_count_per_mem)
+                        # self.print('[INFO] ', _lambda.grad.data.sum(), flush=True)
 
                         # then we have to accumulate the gradients into the grad
                         # update lambda (gradient descent)
