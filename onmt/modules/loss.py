@@ -59,7 +59,9 @@ class CrossEntropyLossBase(_Loss):
 
     def _compute_loss(self, logits, targets,
                       softmaxed=False,
-                      loss_weights=None, loss_constraint=0):
+                      loss_weights=None,
+                      loss_constraint=0,
+                      sum_loss=True):
         """
         :param logits: T x B x V or B x T x V tensor (output of decoder)
         :param targets: T x B x V or B x T target tensor
@@ -77,7 +79,8 @@ class CrossEntropyLossBase(_Loss):
         eps_i = self.smoothing_value if self.training else 0.0
         fast_entropy = self.fast_xentropy and not softmaxed
 
-        go_to_slow_code = True
+        go_to_slow_code = False
+
         if not softmaxed:
             # Try the fastest softmax + loglikelihood implementation first
             if fast_entropy and (logits.dtype == torch.float16 or logits.dtype == torch.float32
@@ -85,21 +88,24 @@ class CrossEntropyLossBase(_Loss):
                 half_to_float = (logits.dtype == torch.float16 or logits.dtype == torch.bfloat16)
                 loss = self.softmax_xentropy(logits, gtruth, label_smoothing, self.padding_idx, half_to_float)
 
+                # We need to return the loss data without masking bad positions
+                # Otherwise the values from "low" validation perplexities cannot be trusted
+                if sum_loss:
+                    with torch.no_grad():
+                        loss_data = loss.sum().data.item()
+                else:
+                    loss_data = loss.data
+
                 # apply the constraint
                 loss = loss - loss_constraint
 
-                # We need to return the loss data without masking bad positions
-                # Otherwise the values from "low" validation perplexities cannot be trusted
-                with torch.no_grad():
-                    loss_data = loss.sum().data.item()
-
-                # bad_loss = torch.logical_or(torch.isinf(loss), torch.isnan(loss))
-                # if bad_loss.any():
-                #     loss.masked_fill_(bad_loss, 0)
                 if loss_weights is not None:
                     loss = loss * loss_weights
 
-                loss = loss.sum()
+                if sum_loss:
+                    loss = loss.sum()
+
+                return loss, loss_data
             else:
                 try:
                     # Otherwise backoff to Pytorch (1.10+)
@@ -107,27 +113,33 @@ class CrossEntropyLossBase(_Loss):
                                            ignore_index=self.padding_idx, reduction='none',
                                            label_smoothing=label_smoothing)
 
-                    with torch.no_grad():
-                        loss_data = loss.sum().data.item()
+                    if sum_loss:
+                        with torch.no_grad():
+                            loss_data = loss.sum().data.item()
+                    else:
+                        loss_data = loss.data
 
                     loss = loss - loss_constraint
 
                     if loss_weights is not None:
                         loss = loss * loss_weights
 
-                    # bad_loss = torch.logical_or(torch.isinf(loss), torch.isnan(loss))
-                    # if bad_loss.any():
-                    #     loss.masked_fill_(bad_loss, 0)
+                    if sum_loss:
+                        loss = loss.sum()
 
-                    loss = loss.sum()
+                    return loss, loss_data
 
-                except AttributeError:
+                except AttributeError as e:
                     go_to_slow_code = True
+                    raise e
         else:
             go_to_slow_code = True
 
         # Then backoff to manual python code
         if go_to_slow_code:
+
+            assert sum_loss, "the slow code doesn't support non-sum loss"
+
             if not softmaxed:
                 lprobs = F.log_softmax(logits, dim=-1, dtype=torch.float32)
             else:
@@ -200,20 +212,42 @@ class NMTLossFunc(CrossEntropyLossBase):
 
         target_probs = F.softmax(target_logits, dim=-1, dtype=torch.float32)
 
-        # print("[INFO] KL Divergence loss")
-
         kl_loss = F.kl_div(log_probs, target_probs, reduction='none').sum()
 
         output_dict = {"loss": kl_loss, "data": kl_loss.data}
 
         return output_dict
 
+    def dpl_lambda_loss(self, model_outputs, targets,
+                        loss_constraint=0.0001):
+
+        logits = model_outputs['logprobs']
+        pad_mask = targets.eq(self.padding_idx)
+
+        tgt_len, bsz = logits.size(0), logits.size(1)
+        logits = logits.view(-1, logits.size(-1))
+        gtruth = targets.view(-1)
+
+        label_smoothing = self.label_smoothing if self.training else False
+        # measure the loss
+        loss = F.cross_entropy(logits.float(), gtruth, weight=None,
+                               ignore_index=self.padding_idx, reduction='none',
+                               label_smoothing=label_smoothing)
+
+        diff = loss_constraint - loss
+        # why sum? basically we share lambda across the time dimension
+        # each sample in the memory is weighted with lambda_i, and we just need to sum up over the time dimension
+        diff = diff.view(tgt_len, bsz).masked_fill_(pad_mask, 0).sum(dim=0, keepdim=False)
+
+        return diff
+
 
     def forward(self, model_outputs, targets,
                 model=None, vocab_mask=None, eval=False,
                 kl_divergence=False, target_probs=None,
                 lagrangian_weights=None,
-                loss_constraint=0, **kwargs):
+                loss_constraint=0,
+                sum_loss=True, **kwargs):
         """
         Compute the loss. Subclass must define this method.
         Args:
@@ -228,6 +262,7 @@ class NMTLossFunc(CrossEntropyLossBase):
             :param target_probs
             :param lagrangian_weights
             :param loss_constraint
+            :param sum_loss: whether to sum the final loss into one single tensor or not
         """
 
         if kl_divergence:
@@ -270,7 +305,7 @@ class NMTLossFunc(CrossEntropyLossBase):
 
         loss, loss_data = self._compute_loss(logits, labels,
                                              softmaxed=softmaxed, loss_weights=loss_weights,
-                                             loss_constraint=loss_constraint)
+                                             loss_constraint=loss_constraint, sum_loss=sum_loss)
 
         total_loss = loss
 

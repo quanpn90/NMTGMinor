@@ -33,8 +33,10 @@ def make_parser(parser):
 
     parser.add_argument('-dpl_training', action='store_true',
                         help='Dual Primal Laplacian Learning approach')
-    parser.add_argument('-dpl_epsilon', type=float, default=0.0001,
+    parser.add_argument('-dpl_epsilon', type=float, default=0,
                         help='Lower bound loss for dual primal')
+    parser.add_argument('-dpl_count', type=int, default=1,
+                        help='Number of updates per dpl update (lambda update)')
 
     parser.add_argument('-dataset_index', type=int, default=0,
                         help='Index of the dataset used in OFFLINE continual learning')

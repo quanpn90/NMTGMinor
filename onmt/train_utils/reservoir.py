@@ -72,10 +72,12 @@ class Reservoir:
             return
         # lagrangian weights for each memory sample in the buffer
         self.weights = torch.nn.Parameter(torch.randn(self.max_samples))
+        self.weights_ones = torch.nn.Parameter(torch.ones(self.max_samples))
 
     def cuda(self):
         if self.weights is not None:
             self.weights = self.weights.cuda()
+            self.weights_ones = self.weights_ones.cuda()
 
     def parameters(self):
 
@@ -109,8 +111,11 @@ class Reservoir:
 
         # TODO: initialize weights per sample if needed
         self.weighting = weighting
+        self.static = weighting
         self.weights = None
+        self.batch_data = []
         self.initialize_weights()
+        self.create_minidataset()
 
     # def add_sample(self, sample):
     def add_sample(self, batch, recurring=False):
@@ -200,6 +205,82 @@ class Reservoir:
             else:
                 raise NotImplementedError
 
+    def create_minidataset(self):
+
+        # first we need to sort
+        all_data = self.data.values()
+
+        # sort in descending order
+        sorted_data = sorted(enumerate(all_data), key=lambda x: x[1][2], reverse=True)
+
+        # now we need to create the minibatches
+        batches = list()
+        current_batch = list()
+        current_batch_sizes = list()
+        for sample in sorted_data:
+            reservoir_index = sample[0]
+            dataset_id, index, src_length, tgt_length = sample[1]
+            sample_data = (dataset_id, index, reservoir_index)
+
+            if _is_oversized(current_batch, src_length, current_batch_sizes,
+                             self.batch_size_frames, self.batch_size_sents):
+
+                # if the current sample cannot be added to the minibatch
+                batches.append(current_batch)
+                current_batch = list()
+                current_batch_sizes = list()
+
+            else:
+                current_batch.append(sample_data)
+                current_batch_sizes.append(src_length)
+
+        if len(current_batch) > 0:
+            batches.append(current_batch)
+
+        # convert to the data format that the dataset accepts (a list of dataset ids and a list of indices)
+        batch_data = list()
+        for sample in batches:
+            _dataset_ids = [_x[0] for _x in sample]
+            _indices = [_x[1] for _x in sample]
+            _reservoir_ids = [_x[2] for _x in sample]
+
+            with torch.no_grad():
+                lagrangian_weights = self.weights[_reservoir_ids]
+
+            batch_data.append((_dataset_ids, _indices, lagrangian_weights, _reservoir_ids))
+
+        self.batch_data = batch_data
+        return
+
+    def get_samples(self, worker=0, num_workers=1):
+
+        assert self.unit in ['sample', 'samples']
+
+        # regenerate the minibatches if dynamic, otherwise reuse
+        if not self.static:
+            self.create_minidataset()
+
+        if len(self.batch_data) == 0:
+            self.create_minidataset()
+
+        batch_data = self.batch_data
+
+        # split the list into
+        num_batches = len(batch_data)
+        avg_chunk_size = num_batches // num_workers
+        remainder = num_batches % num_workers
+
+        sub_lists = []
+        start = 0
+
+        for i in range(num_workers):
+            # Calculate the end index for this chunk
+            end = start + avg_chunk_size + (1 if i < remainder else 0)
+            sub_lists.append(batch_data[start:end])
+            start = end  # Move start to the next chunk's beginning
+
+        assert worker < len(sub_lists)
+        return sub_lists[worker], num_batches
 
     def sample(self):
 

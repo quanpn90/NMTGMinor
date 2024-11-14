@@ -844,6 +844,9 @@ class OfflineCLTrainer(object):
                 if n in self.fisher_info['mean'] and p.requires_grad:
                     parameters[n] = p
 
+        if opt.dpl_training:
+            dpl_count = 0
+
         _data_iterator = data_iterator
         _epoch_iterator = epoch_iterator
 
@@ -880,7 +883,6 @@ class OfflineCLTrainer(object):
                     rehearse = True  # so that the next one is to rehearse
             else:
                 rehearsed_data = self.reservoir.sample()
-
                 rehearsed_dataset_ids, rehearsed_indices = rehearsed_data[0], rehearsed_data[1]
 
                 if opt.dpl_training:
@@ -915,12 +917,8 @@ class OfflineCLTrainer(object):
                 with maybe_no_sync():
                     with autocast(enabled=opt.fp16, dtype=torch.bfloat16 if self.bf16_ready else torch.float16):
 
+                        targets = batch.get('target_output')
                         tgt_mask = targets.ne(onmt.constants.PAD)
-                        if opt.load_pretrained_classifier:
-                            with torch.no_grad():
-                                layer_states = self.classifier.encode(batch)
-                        else:
-                            layer_states = None
 
                         outputs = self.model(batch, streaming=False, target_mask=tgt_mask,
                                              zero_encoder=opt.zero_encoder,
@@ -940,10 +938,11 @@ class OfflineCLTrainer(object):
                         outputs['tgt_mask'] = tgt_mask
 
                         ctc_only = False
-                        self.print(lagrangian_weights)
+                        lower_bound = opt.dpl_epsilon if (opt.dpl_training and rehearsing) else 0
+                        loss_weights = lagrangian_weights if (opt.dpl_training and rehearsing) else None
                         loss_dict = self.loss_function(outputs, targets, model=self.model,
-                                                       lagrangian_weights=lagrangian_weights,
-                                                       loss_constraint=opt.dpl_epsilon)
+                                                       lagrangian_weights=loss_weights,
+                                                       loss_constraint=lower_bound)
                         loss_data = loss_dict['data']
                         loss = loss_dict['loss']  # a little trick to avoid gradient overflow with fp16
                         full_loss = loss
@@ -1146,17 +1145,78 @@ class OfflineCLTrainer(object):
 
                 if opt.dpl_training:
 
+                    def maybe_no_sync_dpl():
+                        if isinstance(self.model, DDP_model) or isinstance(self.model, FSDP):
+                            return self.model.no_sync()
+                        else:
+                            # when we dont reach the updating step, we do not need to synchronize the gradients
+                            # thus disabling the backward grad sync to improve speed
+                            return contextlib.ExitStack()  # dummy contextmanager
+                    # now we have to
                     # TODO:
-                    _lambda = self.reservoir.parameters()[0]
+                    dpl_count += 1
+                    if dpl_count >= opt.dpl_count:
+                        _lambda = self.reservoir.parameters()[0]
+                        # initialize the grad
+                        _lambda.grad = _lambda.new_zeros(_lambda.size())
 
-                    # synchronize the gradients for the lambdas (weights in buffers)
-                    self.all_reduce(_lambda.grad.data, op=dist.ReduceOp.SUM, group=self.group)
+                        memory_batches, total = self.reservoir.get_samples(worker=self.rank, num_workers=self.world_size)
 
-                    self.lambda_optim.step()
-                    self.lambda_optim.zero_grad()
-                    # update lambdas using Adam (probably we should also use the same learning rate/schedule?)
-                    # reset the gradient for the lambdas
-                    pass
+                        self.print("[INFO] Updating the Lambdas for Dual Primal with %d rehearsal batches ...." % total, flush=True)
+
+                        total_mem_targets = zero_tensor()
+                        total_diff = zero_tensor()
+                        for memory_batch in memory_batches:
+                            with maybe_no_sync_dpl():
+                                with torch.no_grad():
+                                    rehearsed_dataset_ids, rehearsed_indices = memory_batch[0], memory_batch[1]
+                                    lagrangian_weights = memory_batch[2]
+                                    reservoir_ids = memory_batch[3]
+
+                                    if opt.dpl_training:
+                                        lagrangian_weights = rehearsed_data[2]
+
+                                    samples = get_batch_from_multidataset(train_data, rehearsed_dataset_ids,
+                                                                          rehearsed_indices)
+
+                                    batch = prepare_sample(samples, device=self.device)
+                                    targets = batch.get('target_output')
+                                    tgt_mask = targets.ne(onmt.constants.PAD)
+
+                                    with autocast(enabled=opt.fp16,
+                                                  dtype=torch.bfloat16 if self.bf16_ready else torch.float16):
+
+                                        outputs = self.model(batch, streaming=False, target_mask=tgt_mask,
+                                                             ctc_loss_function=self.ctc_loss_function,
+                                                             ctc_labels=targets,
+                                                             ctc_coeff=opt.ctc_loss if self.optim._step > opt.ctc_loss_delay else 0.0,
+                                                             transducer_loss_function=self.transducer_loss_function,
+                                                             transducer_coeff=opt.transducer_loss
+                                                             )
+
+                                    lower_bound = opt.dpl_epsilon
+
+                                    # we need to find the gradients that flow into the memory positions
+                                    # so the trick here is to use a weight with value = 1 (
+
+                                    diff = self.loss_function.dpl_lambda_loss(outputs, targets,
+                                                                                   loss_constraint=lower_bound)
+
+                                # note that the sub_ here is because
+                                # the DPL paper updates lambda by adding lr * (loss - lower_bound)
+                                _lambda.grad.data[rehearsed_dataset_ids].sub_(diff.data)
+                                del diff
+
+                        # self.all_reduce(total_diff, op=dist.ReduceOp.SUM, group=self.group)
+                        # we ignore the weighted by datasize because ... its too hard
+                        self.all_reduce(_lambda.grad, op=dist.ReduceOp.SUM, group=self.group)
+                        self.print('[INFO] ', _lambda.grad.data.sum(), flush=True)
+
+                        # then we have to accumulate the gradients into the grad
+                        # update lambda (gradient descent)
+                        self.lambda_optim.step()
+                        self.lambda_optim.zero_grad()
+                        dpl_count = 0
 
                 counter = 0
                 num_accumulated_words.zero_()
