@@ -89,7 +89,8 @@ class Reservoir:
                  batch_size_frames=1,
                  batch_size_words=1,
                  batch_size_sents=1,
-                 weighting=False):
+                 weighting=False,
+                 dark_experience=False):
 
         # default as 0
         self.total_per_dataset = defaultdict(int)
@@ -117,12 +118,17 @@ class Reservoir:
         self.initialize_weights()
         self.create_minidataset()
 
+        self.dark_experience = dark_experience
+
     # def add_sample(self, sample):
-    def add_sample(self, batch, recurring=False):
+    def add_sample(self, batch,
+                   recurring=False,
+                   logits=None):
         """
         Args:
             batch: a list of data samples
             recurring: if recurring: don't increase the observed (not sure)
+            logits: a list of unnormalized probabilities stored for each sample
 
         Returns:
 
@@ -168,6 +174,9 @@ class Reservoir:
 
         elif self.unit in ['sample', 'samples']:
 
+            if self.dark_experience:
+                assert logits is not None
+
             if self.update_method == "reservoir_sampling":
 
                 (dataset_id, indices, src_lengths, tgt_lengths) = batch
@@ -179,7 +188,6 @@ class Reservoir:
 
                     if len(self.data) < self.max_samples:
 
-                        # we have to store more information in this case
                         self.data[len(self.data)] = (dataset_id, index, src_lengths[j],  tgt_lengths[j])
                         self.num_observed += 1
 
@@ -197,7 +205,12 @@ class Reservoir:
                             self.total_per_dataset[_dataset_id] -= 1
                             del self.data[r]
 
-                            self.data[r] = (dataset_id, index, src_lengths[j],  tgt_lengths[j])
+                            # if self.dark_experience:
+                            #     self.data[r] = (dataset_id, index,
+                            #                     src_lengths[j], tgt_lengths[j],
+                            #                     logits[j])
+                            # else:
+                            self.data[r] = (dataset_id, index, src_lengths[j], tgt_lengths[j])
                             self.total_per_dataset[dataset_id] += 1
 
                             assert len(self.data) == self.max_samples
@@ -252,16 +265,41 @@ class Reservoir:
         self.batch_data = batch_data
         return
 
-    def get_samples(self, worker=0, num_workers=1):
+    def import_logits(self, _reservoir_ids, logits):
+        """
+        Args:
+            _reservoir_ids:
+            logits: a list of logits which are vectors with size [V]
+
+        Returns:
+
+        """
+        assert len(_reservoir_ids) == len(logits)
+
+        for r_id, logit in zip(_reservoir_ids, logits):
+
+            # append the logit data to the entry in the data
+            if len(self.data[r_id] == 5):
+                self.data[r_id][4] = logit
+            else:
+                self.data[r_id].append(logit)
+
+            # TODO: compare the current logits with the previous
+            # to check if the model is doing any better than before on the dark experience?
+
+    def get_samples(self, worker=0, num_workers=1, force_shuffle=False):
 
         assert self.unit in ['sample', 'samples']
 
         # regenerate the minibatches if dynamic, otherwise reuse
-        if not self.static:
+        if force_shuffle:
             self.create_minidataset()
+        else:
+            if not self.static:
+                self.create_minidataset()
 
-        if len(self.batch_data) == 0:
-            self.create_minidataset()
+            if len(self.batch_data) == 0:
+                self.create_minidataset()
 
         batch_data = self.batch_data
 

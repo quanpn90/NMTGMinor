@@ -624,6 +624,7 @@ class Batch(object):
         Send the minibatch data into GPU.
         :param device: default = None (default CUDA device)
         :param fp16:
+        :param bf16:
         :return: None
         """
         for key, tensor in self.tensors.items():
