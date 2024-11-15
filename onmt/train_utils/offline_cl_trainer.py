@@ -14,7 +14,6 @@ import functools
 import glob
 import sys
 
-
 import onmt
 import onmt.markdown
 import onmt.modules
@@ -48,6 +47,7 @@ import dill
 from multiprocessing.managers import ListProxy as ListProxy
 
 from distutils.version import LooseVersion
+
 # ignore the pytorch -> numpy conversion warnings
 warnings.filterwarnings("ignore", category=UserWarning)
 
@@ -79,7 +79,6 @@ def prepare_sample(batch, device=None,
     batch = rewrap(batch)
 
     if reservoir is not None:
-
         assert dataset_id is not None
         indices = batch.get('indices')
         src_lengths = batch.get('src_lengths')
@@ -90,6 +89,7 @@ def prepare_sample(batch, device=None,
         batch.cuda(fp16=False, device=device)
 
     return batch
+
 
 def is_list(object):
     if isinstance(object, list):
@@ -238,7 +238,6 @@ class OfflineCLTrainer(object):
         else:
             proto_model = None
 
-
         """ Building the loss function """
         tgt_pad = dicts['tgt_pad']
 
@@ -255,8 +254,8 @@ class OfflineCLTrainer(object):
             # self.ctc_loss_function = CTC(dicts['tgt'].size(), opt.model_size, 0.0, reduce=True,
             #                              padding_idx=tgt_pad, blank_idx=0)
             self.transducer_loss_function = TransducerLoss(fuse_softmax_backward=True,
-                                                  opt=1, packed_input=False,
-                                                  blank_idx=tgt_pad)
+                                                           opt=1, packed_input=False,
+                                                           blank_idx=tgt_pad)
 
         else:
             self.transducer_loss_function = None
@@ -330,8 +329,6 @@ class OfflineCLTrainer(object):
             if opt.meta_learning:
                 self.proto_model = self.proto_model.cuda(device=self.device)
 
-
-
         # if self.opt.flatten_parameters:
         #     self.optim.flatten_parameters()
         #     if self.agem_training:
@@ -401,8 +398,6 @@ class OfflineCLTrainer(object):
                 self.mem_optim = onmt.Optim(opt)
                 self.mem_optim.set_parameters(self.mem_model.parameters(), flattened=opt.flatten_parameters)
 
-
-
             if self.is_main():
                 print("[INFO] Optimizer: ", self.optim.optimizer)
 
@@ -431,8 +426,7 @@ class OfflineCLTrainer(object):
             if self.agem_training:
                 self.mem_model = torch.nn.parallel.DistributedDataParallel(self.mem_model, device_ids=[self.rank],
                                                                            output_device=self.rank,
-                                                                           find_unused_parameters=find_unused_parameters,)
-
+                                                                           find_unused_parameters=find_unused_parameters, )
 
         if self.is_main():
             nparams = sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -456,7 +450,6 @@ class OfflineCLTrainer(object):
                     self.fisher_info['fisher_diag'][n] = self.fisher_info['fisher_diag'][n].cuda()
         else:
             self.fisher_info = None
-
 
         # TODO: add option for reservoir size
 
@@ -491,7 +484,6 @@ class OfflineCLTrainer(object):
 
                     self.print("[INFO] Memory Statistics")
                     for _d in self.reservoir.stats:
-
                         n_samples = len(self.reservoir.stats[_d])
                         prob = n_samples / total
                         self.print("Dataset ", _d, ":", n_samples,
@@ -794,9 +786,9 @@ class OfflineCLTrainer(object):
         _dataset = dataset[dataset_id]
 
         data_iterator = generate_data_iterator(_dataset, self.rank, self.world_size,
-                                                   seed=self.opt.seed, num_workers=opt.num_workers,
-                                                   epoch=epoch, buffer_size=opt.buffer_size, split_even=True,
-                                                   dataset_ids=None)
+                                               seed=self.opt.seed, num_workers=opt.num_workers,
+                                               epoch=epoch, buffer_size=opt.buffer_size, split_even=True,
+                                               dataset_ids=None)
 
         # TODO: fix resume which is currently buggy
         if resume:
@@ -863,7 +855,7 @@ class OfflineCLTrainer(object):
 
         update_frequency = 2 * opt.update_frequency if dataset_id > 0 else opt.update_frequency
 
-        while not (_data_iterator.end_of_epoch() and not rehearse) :
+        while not (_data_iterator.end_of_epoch() and not rehearse):
 
             lagrangian_weights = None
 
@@ -878,7 +870,6 @@ class OfflineCLTrainer(object):
 
                 # if (epoch > 1 or dataset_id > 0) and self.reservoir is not None:
                 if self.reservoir is not None and dataset_id > 0:
-
                     # we start to rehearse immediately
                     rehearse = True  # so that the next one is to rehearse
             else:
@@ -924,12 +915,12 @@ class OfflineCLTrainer(object):
                                              zero_encoder=opt.zero_encoder,
                                              mirror=opt.mirror_loss > 0,
                                              adv_ptb_grad=False,
-                                             ctc_loss_function = self.ctc_loss_function,
-                                             ctc_labels = targets,
-                                             grad_scaler = self.grad_scaler,
-                                             ctc_coeff = opt.ctc_loss if self.optim._step > opt.ctc_loss_delay else 0.0,
-                                             transducer_loss_function = self.transducer_loss_function,
-                                             transducer_coeff = opt.transducer_loss
+                                             ctc_loss_function=self.ctc_loss_function,
+                                             ctc_labels=targets,
+                                             grad_scaler=self.grad_scaler,
+                                             ctc_coeff=opt.ctc_loss if self.optim._step > opt.ctc_loss_delay else 0.0,
+                                             transducer_loss_function=self.transducer_loss_function,
+                                             transducer_coeff=opt.transducer_loss
                                              )
 
                         batch_size = batch.size
@@ -1031,7 +1022,6 @@ class OfflineCLTrainer(object):
 
                     # EWC training: no need for autograd here?
                     if self.optim._step % opt.ewc_decay_every == 0:
-
                         ewc_importance = ewc_importance / opt.ewc_decay_scale
 
                     # only run this ewc everytime we reduce
@@ -1039,7 +1029,8 @@ class OfflineCLTrainer(object):
             except RuntimeError as e:
                 if 'out of memory' in str(e):
                     print('[WARNING]: ran out of memory on GPU %d' % self.rank, flush=True)
-                    print('Input size at OOM position:', batch.get('source').size() if batch.get('source') is not None else None,
+                    print('Input size at OOM position:',
+                          batch.get('source').size() if batch.get('source') is not None else None,
                           batch.get('target').size() if batch.get('target') is not None else None)
 
                     # continue
@@ -1152,6 +1143,7 @@ class OfflineCLTrainer(object):
                             # when we dont reach the updating step, we do not need to synchronize the gradients
                             # thus disabling the backward grad sync to improve speed
                             return contextlib.ExitStack()  # dummy contextmanager
+
                     # now we have to
                     # TODO:
                     dpl_count += 1
@@ -1161,9 +1153,11 @@ class OfflineCLTrainer(object):
                         _lambda.grad = _lambda.new_zeros(_lambda.size())
                         total_count_per_mem = _lambda.new_ones(_lambda.size())
 
-                        memory_batches, total = self.reservoir.get_samples(worker=self.rank, num_workers=self.world_size)
+                        memory_batches, total = self.reservoir.get_samples(worker=self.rank,
+                                                                           num_workers=self.world_size)
 
-                        self.print("[INFO] Updating the Lambdas for Dual Primal with %d rehearsal batches ...." % total, flush=True)
+                        self.print("[INFO] Updating the Lambdas for Dual Primal with %d rehearsal batches ...." % total,
+                                   flush=True)
 
                         for memory_batch in memory_batches:
                             with maybe_no_sync_dpl():
@@ -1184,7 +1178,6 @@ class OfflineCLTrainer(object):
 
                                     with autocast(enabled=opt.fp16,
                                                   dtype=torch.bfloat16 if self.bf16_ready else torch.float16):
-
                                         outputs = self.model(batch, streaming=False, target_mask=tgt_mask,
                                                              ctc_loss_function=self.ctc_loss_function,
                                                              ctc_labels=targets,
@@ -1199,7 +1192,7 @@ class OfflineCLTrainer(object):
                                     # so the trick here is to use a weight with value = 1 (
 
                                     diff, count = self.loss_function.dpl_lambda_loss(outputs, targets,
-                                                                                   loss_constraint=lower_bound)
+                                                                                     loss_constraint=lower_bound)
 
                                 # note that the sub_ here is because
                                 # the DPL paper updates lambda by adding lr * (loss - lower_bound)
@@ -1247,7 +1240,7 @@ class OfflineCLTrainer(object):
                         else:
                             value = self.model.choose_best_epoch_by
                     else:
-                        value = 1-valid_accuracy
+                        value = 1 - valid_accuracy
                     self.save(ep, dataset_id, value,
                               itr=data_iterator)
 
@@ -1333,7 +1326,7 @@ class OfflineCLTrainer(object):
                         try:
                             _ewc_loss = report_ewc_loss.item() / report_ewc_count
                         except ZeroDivisionError:
-                            _ewc_loss =  float('nan')
+                            _ewc_loss = float('nan')
                         log_string += (" ewcloss: %8.8f ; " % _ewc_loss)
 
                     if opt.predict_language > 0:
@@ -1341,7 +1334,7 @@ class OfflineCLTrainer(object):
                             _enc_lid_loss = report_enc_lid_loss.item() / report_enc_lid_count
                             _dec_lid_loss = report_dec_lid_loss.item() / report_dec_lid_count
                         except ZeroDivisionError:
-                            _enc_lid_loss =  float('nan')
+                            _enc_lid_loss = float('nan')
                             _dec_lid_loss = float('nan')
                         log_string += (" enc_lidloss: %8.8f ; " % _enc_lid_loss)
                         log_string += (" dec_lidloss: %8.8f ; " % _dec_lid_loss)
@@ -1495,7 +1488,7 @@ class OfflineCLTrainer(object):
                     return clash
 
                 # constraint violated
-                projection_term = nom/denom
+                projection_term = nom / denom
 
                 if torch.isnan(projection_term):
                     projection_term.fill_(1.0)
@@ -1610,7 +1603,7 @@ class OfflineCLTrainer(object):
         update_frequency = 2 * opt.update_frequency if dataset_id > 0 else opt.update_frequency
 
         # stop_condition = (_data_iterator.end_of_epoch() and not rehearse)
-        while not  (_data_iterator.end_of_epoch() and not rehearse):
+        while not (_data_iterator.end_of_epoch() and not rehearse):
 
             if not rehearse or opt.reservoir_size <= 0:
                 samples = next(_epoch_iterator)
@@ -1660,20 +1653,20 @@ class OfflineCLTrainer(object):
                     with autocast(enabled=opt.fp16, dtype=torch.bfloat16 if self.bf16_ready else torch.float16):
 
                         tgt_mask = targets.ne(onmt.constants.PAD)
-                        outputs = current_model( batch, streaming=False, target_mask=tgt_mask,
-                                                 zero_encoder=opt.zero_encoder,
-                                                 mirror=opt.mirror_loss > 0.0,
-                                                 adv_ptb_grad=False,
-                                                 checkpointing_ffn=opt.checkpointing_ffn,
-                                                 checkpointing_cross_attn=opt.checkpointing_cross_attn,
-                                                 checkpointing_self_attn=opt.checkpointing_self_attn,
-                                                 ctc_loss_function=self.ctc_loss_function,
-                                                 ctc_labels=targets,
-                                                 grad_scaler=self.grad_scaler,
-                                                 ctc_coeff=opt.ctc_loss if self.optim._step > opt.ctc_loss_delay else 0.0,
-                                                 transducer_loss_function=self.transducer_loss_function,
-                                                 transducer_coeff=opt.transducer_loss
-                                             )
+                        outputs = current_model(batch, streaming=False, target_mask=tgt_mask,
+                                                zero_encoder=opt.zero_encoder,
+                                                mirror=opt.mirror_loss > 0.0,
+                                                adv_ptb_grad=False,
+                                                checkpointing_ffn=opt.checkpointing_ffn,
+                                                checkpointing_cross_attn=opt.checkpointing_cross_attn,
+                                                checkpointing_self_attn=opt.checkpointing_self_attn,
+                                                ctc_loss_function=self.ctc_loss_function,
+                                                ctc_labels=targets,
+                                                grad_scaler=self.grad_scaler,
+                                                ctc_coeff=opt.ctc_loss if self.optim._step > opt.ctc_loss_delay else 0.0,
+                                                transducer_loss_function=self.transducer_loss_function,
+                                                transducer_coeff=opt.transducer_loss
+                                                )
 
                         batch_size = batch.size
                         # outputs is a dictionary containing keys/values necessary for loss function
@@ -1869,7 +1862,6 @@ class OfflineCLTrainer(object):
                             loss.backward()
                             report_ewc_loss.add_(ewc_loss)
                             report_ewc_count += 1
-
 
                 if self.grad_scaler is not None:
                     self.optim.step(scaler=self.grad_scaler)
@@ -2215,9 +2207,9 @@ class OfflineCLTrainer(object):
                                              checkpointing_ffn=opt.checkpointing_ffn,
                                              checkpointing_cross_attn=opt.checkpointing_cross_attn,
                                              checkpointing_self_attn=opt.checkpointing_self_attn,
-                                             ctc_loss_function = self.ctc_loss_function,
-                                             ctc_labels = targets,
-                                             grad_scaler = self.grad_scaler
+                                             ctc_loss_function=self.ctc_loss_function,
+                                             ctc_labels=targets,
+                                             grad_scaler=self.grad_scaler
                                              )
 
                         batch_size = batch.size
@@ -2309,7 +2301,7 @@ class OfflineCLTrainer(object):
             num_words = tgt_size
             report_loss.add_(loss_data)
             report_tgt_words.add_(num_words)
-            report_src_words.add_(src_size) 
+            report_src_words.add_(src_size)
             total_loss.add_(loss_data)
             total_words.add_(num_words)
 
@@ -2432,19 +2424,18 @@ class OfflineCLTrainer(object):
         i = 0
         log_interval = 1000
 
+        # TODO: debug to know why it takes so long to populate the samples
+
         while not data_iterator.end_of_epoch():
             samples = next(epoch_iterator)
 
-            # if opt.dark_experience:
-                # first send the data to cuda
-            prepare_sample(samples, device=self.device, dataset_id=dataset_id)
+            prepare_sample(samples, device=self.device, dataset_id=dataset_id,
+                           reservoir=self.reservoir, cuda=False)
 
             # lets try to log it for now ...
             if i == 0 or ((i + 1) % log_interval < 1):
-
                 log_string = ("Dataset %d, %5d/%5d;" %
                               (dataset_id, i + 1, len(data_iterator)))
-
 
                 self.print(log_string, flush=True)
 
@@ -2452,7 +2443,9 @@ class OfflineCLTrainer(object):
             i = i + 1
 
         self.print("[INFO] Generating logits for dark experience replay")
-        memory_batches, total = self.reservoir.get_samples(worker=self.rank, num_workers=self.world_size)
+        memory_batches, total = self.reservoir.get_samples(worker=self.rank,
+                                                           num_workers=self.world_size,
+                                                           force_shuffle=True)
 
         self.print("[INFO] Updating the Lambdas for Dual Primal with %d rehearsal batches ...." % total, flush=True)
 
@@ -2492,7 +2485,6 @@ class OfflineCLTrainer(object):
             trimmed_logits = list()
 
             for i, l in enumerate(lengths):
-
                 # logit is a sequence [T x V]
                 logit = logits[:, i, :]
                 assert logit.size(0) == seq_len
@@ -2541,7 +2533,6 @@ class OfflineCLTrainer(object):
         #     prepare_sample(samples, device=self.device, dataset_id=dataset_id,
         #                    reservoir=self.reservoir, cuda=False)
 
-
     def average_checkpoints(self):
 
         self.print("[INFO] Averaging the parameters for the current round after training ...", flush=True)
@@ -2587,11 +2578,12 @@ class OfflineCLTrainer(object):
             model_opt = checkpoint['opt']
 
             dicts = checkpoint['dicts']
-            constants = onmt.constants # lol
+            constants = onmt.constants  # lol
             model_opt.enc_state_dict = None
             model_opt.dec_state_dict = None
 
-            main_model = custom_build_model(model_opt, checkpoint['dicts'], lm=False, type='seq2seq', constants=constants)
+            main_model = custom_build_model(model_opt, checkpoint['dicts'], lm=False, type='seq2seq',
+                                            constants=constants)
             # onmt.constants = add_tokenidx(model_opt, onmt.constants, dicts)
 
             try:
@@ -2795,7 +2787,7 @@ class OfflineCLTrainer(object):
 
         update_frequency = 2 * opt.update_frequency if dataset_id > 0 else opt.update_frequency
 
-        while not (data_iterator.end_of_epoch() and not rehearse) :
+        while not (data_iterator.end_of_epoch() and not rehearse):
 
             self.inner_optim.zero_grad(set_to_none=False)
 
@@ -2811,7 +2803,6 @@ class OfflineCLTrainer(object):
 
                 # if (epoch > 1 or dataset_id > 0) and self.reservoir is not None:
                 if self.reservoir is not None:
-
                     # we start to rehearse immediately
 
                     rehearse = True  # so that the next one is to rehearse
@@ -2844,16 +2835,16 @@ class OfflineCLTrainer(object):
 
                     # inner forward
                     outputs = self.proto_model(batch, streaming=False, target_mask=tgt_mask,
-                                         zero_encoder=opt.zero_encoder,
-                                         mirror=opt.mirror_loss > 0,
-                                         adv_ptb_grad=False,
-                                         ctc_loss_function = self.ctc_loss_function,
-                                         ctc_labels = targets,
-                                         grad_scaler = self.grad_scaler,
-                                         ctc_coeff = opt.ctc_loss if self.optim._step > opt.ctc_loss_delay else 0.0,
-                                         transducer_loss_function = self.transducer_loss_function,
-                                         transducer_coeff = opt.transducer_loss
-                                         )
+                                               zero_encoder=opt.zero_encoder,
+                                               mirror=opt.mirror_loss > 0,
+                                               adv_ptb_grad=False,
+                                               ctc_loss_function=self.ctc_loss_function,
+                                               ctc_labels=targets,
+                                               grad_scaler=self.grad_scaler,
+                                               ctc_coeff=opt.ctc_loss if self.optim._step > opt.ctc_loss_delay else 0.0,
+                                               transducer_loss_function=self.transducer_loss_function,
+                                               transducer_coeff=opt.transducer_loss
+                                               )
 
                     batch_size = batch.size
                     # outputs is a dictionary containing keys/values necessary for loss function
@@ -2896,7 +2887,8 @@ class OfflineCLTrainer(object):
             except RuntimeError as e:
                 if 'out of memory' in str(e):
                     print('[WARNING]: ran out of memory on GPU %d' % self.rank, flush=True)
-                    print('Input size at OOM position:', batch.get('source').size() if batch.get('source') is not None else None,
+                    print('Input size at OOM position:',
+                          batch.get('source').size() if batch.get('source') is not None else None,
                           batch.get('target').size() if batch.get('target') is not None else None)
 
                     # continue
@@ -2983,7 +2975,7 @@ class OfflineCLTrainer(object):
                         else:
                             value = self.model.choose_best_epoch_by
                     else:
-                        value = 1-valid_accuracy
+                        value = 1 - valid_accuracy
                     self.save(ep, value,
                               itr=data_iterator)
 
@@ -3066,7 +3058,7 @@ class OfflineCLTrainer(object):
                         try:
                             _ewc_loss = report_ewc_loss.item() / report_ewc_count
                         except ZeroDivisionError:
-                            _ewc_loss =  float('nan')
+                            _ewc_loss = float('nan')
                         log_string += (" ewcloss: %8.8f ; " % _ewc_loss)
 
                     log_string += ("lr: %.7f ; updates: %7d; " %
@@ -3294,7 +3286,7 @@ class OfflineCLTrainer(object):
                 train_loss = self.train_epoch_meta(train_data, valid_data, epoch, dataset_id)
             else:
                 train_loss = self.train_epoch(train_data, valid_data, epoch, dataset_id,
-                                            resume=resume, itr_progress=itr_progress)
+                                              resume=resume, itr_progress=itr_progress)
             train_ppl = math.exp(min(train_loss, 100))
             self.print('[INFO] Train perplexity: %g' % train_ppl)
 
@@ -3324,5 +3316,3 @@ class OfflineCLTrainer(object):
             else:
                 value = 1 - valid_accuracy
             self.save(-1, dataset_id, value, final=True)
-
-
