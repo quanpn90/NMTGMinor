@@ -860,9 +860,10 @@ class OCLTrainer(object):
 
                         rehearse = True  # so that the next one is to rehearse
                 else:
-                    # print("rehearsing from memory....", flush=True)
-                    rehearsed_dataset_ids, rehearsed_indices, lagrangian_weights = self.reservoir.sample()
-                    # samples = train_data[rehearsed_dataset_id].get_batch_from_indices(rehearsed_indices)
+                    rehearsed_data = self.reservoir.sample()
+                    rehearsed_dataset_ids = rehearsed_data[0]
+                    rehearsed_indices = rehearsed_data[1]
+
                     samples = get_batch_from_multidataset(train_data, rehearsed_dataset_ids,
                                                           rehearsed_indices)
 
@@ -894,11 +895,6 @@ class OCLTrainer(object):
                         with autocast(enabled=opt.fp16, dtype=torch.bfloat16 if self.bf16_ready else torch.float16):
 
                             tgt_mask = targets.ne(onmt.constants.PAD)
-                            if opt.load_pretrained_classifier:
-                                with torch.no_grad():
-                                    layer_states = self.classifier.encode(batch)
-                            else:
-                                layer_states = None
 
                             outputs = self.model(batch, streaming=False, target_mask=tgt_mask,
                                                  zero_encoder=opt.zero_encoder,

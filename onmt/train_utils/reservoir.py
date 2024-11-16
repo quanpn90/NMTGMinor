@@ -348,6 +348,10 @@ class Reservoir:
 
                 while True:
 
+                    # if we have sampled everything in the dataset:
+                    if len(sampled_ids) == len(self.data):
+                        break
+
                     j = random.randint(0, len(self.data) - 1)
 
                     # maybe we need another option for non-overlapping?
