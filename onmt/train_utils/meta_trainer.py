@@ -856,9 +856,9 @@ class MetaOCLTrainer(object):
 
                         rehearse = True  # so that the next one is to rehearse
                 else:
-                    # print("rehearsing from memory....", flush=True)
-                    rehearsed_dataset_ids, rehearsed_indices = self.reservoir.sample()
-                    # samples = train_data[rehearsed_dataset_id].get_batch_from_indices(rehearsed_indices)
+                    rehearsed_data = self.reservoir.sample()
+                    rehearsed_dataset_ids = rehearsed_data[0]
+                    rehearsed_indices = rehearsed_data[1]
                     samples = get_batch_from_multidataset(train_data, rehearsed_dataset_ids, rehearsed_indices)
 
                     batch = prepare_sample(samples, device=self.device)
@@ -877,16 +877,7 @@ class MetaOCLTrainer(object):
                 reduce = True if counter >= update_frequency or i == (n_samples - 1) else False
 
                 try:
-                    # def maybe_no_sync():
-                    #     if not reduce and (isinstance(self.model, DDP_model) or isinstance(self.model, FSDP)):
-                    #         return self.model.no_sync()
-                    #     else:
-                    #         # when we dont reach the updating step, we do not need to synchronize the gradients
-                    #         # thus disabling the backward grad sync to improve speed
-                    #         return contextlib.ExitStack()  # dummy contextmanager
 
-                    # we always synchronize the inner model here
-                    # with maybe_no_sync():
                     with autocast(enabled=opt.fp16, dtype=torch.bfloat16 if self.bf16_ready else torch.float16):
 
                         tgt_mask = targets.ne(onmt.constants.PAD)

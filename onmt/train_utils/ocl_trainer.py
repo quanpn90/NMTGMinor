@@ -1558,9 +1558,9 @@ class OCLTrainer(object):
                         # we start to rehearse immediately
                         rehearse = True  # so that the next one is to rehearse
                 else:
-                    # print("rehearsing from memory....", flush=True)
-                    rehearsed_dataset_ids, rehearsed_indices = self.reservoir.sample()
-                    # samples = train_data[rehearsed_dataset_id].get_batch_from_indices(rehearsed_indices)
+                    rehearsed_data = self.reservoir.sample()
+                    rehearsed_dataset_ids = rehearsed_data[0]
+                    rehearsed_indices = rehearsed_data[1]
                     samples = get_batch_from_multidataset(train_data, rehearsed_dataset_ids, rehearsed_indices)
 
                     batch = prepare_sample(samples, device=self.device)
