@@ -38,6 +38,10 @@ def make_parser(parser):
     parser.add_argument('-dpl_count', type=int, default=1,
                         help='Number of updates per dpl update (lambda update)')
 
+    parser.add_argument('-dark_experience_replay', action='store_true',
+                        help='Store the model logits at the time for more detailed experience replay. '
+                             'This is equivalent to distilling between the old and the new model')
+
     parser.add_argument('-dataset_index', type=int, default=0,
                         help='Index of the dataset used in OFFLINE continual learning')
     parser.add_argument('-reservoir_size', type=int, default=0,

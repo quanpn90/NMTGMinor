@@ -259,7 +259,7 @@ class Hubert(nn.Module):
         r = None
         if vat_step == 1:
             with torch.no_grad():
-                r = torch.rand_like(input).normal_() * (vat_eps * 100)
+                r = torch.rand_like(input).normal_() * (vat_eps * 1.0)
             r.requires_grad_(True)
             input = input.float() + r.float()
 

@@ -487,7 +487,11 @@ class VAT_OCLTrainer(object):
         if reservoir_size > 0:
             self.reservoir = Reservoir(max_samples=reservoir_size,
                                        update_method="reservoir_sampling",
-                                       unit="sample")
+                                       unit="sample",
+                                       batch_size_frames=opt.batch_size_frames,
+                                       batch_size_sents=opt.batch_size_sents,
+                                       batch_size_words=opt.batch_size_words
+                                       )
         else:
             self.reservoir = None
 
@@ -855,9 +859,9 @@ class VAT_OCLTrainer(object):
 
                         rehearse = True  # so that the next one is to rehearse
                 else:
-                    # print("rehearsing from memory....", flush=True)
-                    rehearsed_dataset_ids, rehearsed_indices = self.reservoir.sample()
-                    # samples = train_data[rehearsed_dataset_id].get_batch_from_indices(rehearsed_indices)
+                    rehearsed_data = self.reservoir.sample()
+                    rehearsed_dataset_ids = rehearsed_data[0]
+                    rehearsed_indices = rehearsed_data[1]
                     samples = get_batch_from_multidataset(train_data, rehearsed_dataset_ids, rehearsed_indices)
 
                     batch = prepare_sample(samples, device=self.device)

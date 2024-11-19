@@ -2442,61 +2442,62 @@ class OfflineCLTrainer(object):
             # increase i by world size
             i = i + 1
 
-        self.print("[INFO] Generating logits for dark experience replay")
-        memory_batches, total = self.reservoir.get_samples(worker=self.rank,
-                                                           num_workers=self.world_size,
-                                                           force_shuffle=True)
+        if opt.dark_experience_replay:
 
-        self.print("[INFO] Updating the Lambdas for Dual Primal with %d rehearsal batches ...." % total, flush=True)
+            self.print("[INFO] Generating logits for dark experience replay")
+            memory_batches, total = self.reservoir.get_samples(worker=self.rank,
+                                                               num_workers=self.world_size,
+                                                               force_shuffle=True)
 
-        for memory_batch in memory_batches:
-            with torch.no_grad():
-                rehearsed_dataset_ids, rehearsed_indices = memory_batch[0], memory_batch[1]
-                reservoir_ids = memory_batch[3]
+            self.print("[INFO] Updating the Lambdas for Dual Primal with %d rehearsal batches ...." % total, flush=True)
 
-                samples = get_batch_from_multidataset(train_data, rehearsed_dataset_ids,
-                                                      rehearsed_indices)
+            for memory_batch in memory_batches:
+                with torch.no_grad():
+                    rehearsed_dataset_ids, rehearsed_indices = memory_batch[0], memory_batch[1]
+                    reservoir_ids = memory_batch[3]
 
-                batch = prepare_sample(samples, device=self.device)
-                targets = batch.get('target_output')
-                tgt_mask = targets.ne(onmt.constants.PAD)
+                    samples = get_batch_from_multidataset(train_data, rehearsed_dataset_ids,
+                                                          rehearsed_indices)
 
-                with autocast(enabled=opt.fp16,
-                              dtype=torch.bfloat16 if self.bf16_ready else torch.float16):
-                    outputs = self.model(batch, streaming=False, target_mask=tgt_mask,
-                                         ctc_loss_function=self.ctc_loss_function,
-                                         ctc_labels=targets,
-                                         ctc_coeff=opt.ctc_loss if self.optim._step > opt.ctc_loss_delay else 0.0,
-                                         transducer_loss_function=self.transducer_loss_function,
-                                         transducer_coeff=opt.transducer_loss
-                                         )
+                    batch = prepare_sample(samples, device=self.device)
+                    targets = batch.get('target_output')
+                    tgt_mask = targets.ne(onmt.constants.PAD)
 
-            # note that the sub_ here is because
-            # the DPL paper updates lambda by adding lr * (loss - lower_bound)
-            # _lambda.grad.data[rehearsed_dataset_ids].sub_(diff.data)
-            # index_tensor = torch.LongTensor(reservoir_ids).to(_lambda.device)
-            logits = outputs['logits']
-            pad_mask = targets.eq(self.loss_function.padding_idx)
-            lengths = (1 - pad_mask.long()).sum(dim=0).tolist()
+                    with autocast(enabled=opt.fp16,
+                                  dtype=torch.bfloat16 if self.bf16_ready else torch.float16):
+                        outputs = self.model(batch, streaming=False, target_mask=tgt_mask,
+                                             ctc_loss_function=self.ctc_loss_function,
+                                             ctc_labels=targets,
+                                             ctc_coeff=opt.ctc_loss if self.optim._step > opt.ctc_loss_delay else 0.0,
+                                             transducer_loss_function=self.transducer_loss_function,
+                                             transducer_coeff=opt.transducer_loss
+                                             )
 
-            logits.masked_fill_(pad_mask, 0)
+                logits = outputs['logits']
+                pad_mask = targets.eq(self.loss_function.padding_idx)
+                lengths = (1 - pad_mask.long()).sum(dim=0).tolist()
 
-            seq_len, bsz = logits.size(0), logits.size(1)
-            trimmed_logits = list()
+                logits.masked_fill_(pad_mask, 0)
 
-            for i, l in enumerate(lengths):
-                # logit is a sequence [T x V]
-                logit = logits[:, i, :]
-                assert logit.size(0) == seq_len
+                seq_len, bsz = logits.size(0), logits.size(1)
+                trimmed_logits = list()
 
-                logit = logit[:l]
-                trimmed_logits.append(logit)
+                for i, l in enumerate(lengths):
+                    # logit is a sequence [T x V]
+                    logit = logits[:, i, :]
+                    assert logit.size(0) == seq_len
 
-            self.reservoir.import_logits(reservoir_ids, trimmed_logits)
+                    logit = logit[:l]
 
-        self.print("[INFO] Done! Now checking if all reservoir have the same logits")
+                    # should we .cpu() at this point?
+                    trimmed_logits.append(logit)ren
 
-        # TODO: update the logits on the way
+                self.reservoir.import_logits(reservoir_ids, trimmed_logits)
+
+            self.print("[INFO] Done! Now checking if all reservoir have the same logits")
+            # TODO: check that all samples in the data have the logits available
+
+        # TODO: only update the logits if the loss is lower? which means that we update the "dark experience" on the way
 
     def estimate_max_epoch(self, train_data=None, dataset_id=None):
 
