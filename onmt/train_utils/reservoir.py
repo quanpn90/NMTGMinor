@@ -38,7 +38,7 @@ class Reservoir:
 
     def get_stats_per_dataset(self):
 
-        print(len(self.data))
+        # print(len(self.data))
         for j in self.data:
 
             sample = self.data[j]
@@ -250,20 +250,56 @@ class Reservoir:
         if len(current_batch) > 0:
             batches.append(current_batch)
 
-        # convert to the data format that the dataset accepts (a list of dataset ids and a list of indices)
+        # convert to the data format that the dataset accepts
+        # (a list of dataset ids and a list of indices)
         batch_data = list()
         for sample in batches:
             _dataset_ids = [_x[0] for _x in sample]
             _indices = [_x[1] for _x in sample]
             _reservoir_ids = [_x[2] for _x in sample]
 
-            with torch.no_grad():
-                lagrangian_weights = self.weights[_reservoir_ids]
+            if self.weights is not None:
+                with torch.no_grad():
+                    lagrangian_weights = self.weights[_reservoir_ids]
+            else:
+                lagrangian_weights = None
 
             batch_data.append((_dataset_ids, _indices, lagrangian_weights, _reservoir_ids))
 
         self.batch_data = batch_data
         return
+
+    def add_sample_single(self, sample):
+
+        dataset_id, index, src_length, tgt_length = sample
+
+        if self.update_method == "reservoir_sampling":
+
+            if len(self.data) < self.max_samples:
+
+                self.data[len(self.data)] = (dataset_id, index, src_length, tgt_length)
+                self.num_observed += 1
+
+                self.total_per_dataset[dataset_id] += 1
+
+            else:
+
+                # random from i to len(self.data) + 1
+                self.num_observed += 1
+                r = random.randint(0, self.num_observed)
+                if r < self.max_samples:
+                    to_delete = self.data[r]
+                    _dataset_id, _, _, _ = to_delete
+                    self.total_per_dataset[_dataset_id] -= 1
+                    del self.data[r]
+
+                    self.data[r] = (dataset_id, index, src_length, tgt_length)
+                    self.total_per_dataset[dataset_id] += 1
+
+                    assert len(self.data) == self.max_samples
+
+        else:
+            raise NotImplementedError
 
     def import_logits(self, _reservoir_ids, logits):
         """
@@ -279,10 +315,10 @@ class Reservoir:
         for r_id, logit in zip(_reservoir_ids, logits):
 
             # append the logit data to the entry in the data
-            if len(self.data[r_id] == 5):
+            if len(self.data[r_id]) == 5:
                 self.data[r_id][4] = logit
             else:
-                self.data[r_id].append(logit)
+                self.data[r_id] += (logit, )
 
             # TODO: compare the current logits with the previous
             # to check if the model is doing any better than before on the dark experience?
@@ -358,7 +394,7 @@ class Reservoir:
                     if j in sampled_ids:
                         continue
 
-                    dataset_id, index, src_length, tgt_length = self.data[j]
+                    dataset_id, index, src_length, tgt_length = self.data[j][:4]
                     randomized_sample = (dataset_id, index)
 
                     # try to add more in current minibatch: if its full then break

@@ -933,6 +933,9 @@ class Dataset(torch.utils.data.Dataset):
             self.tgt_sizes = tgt_sizes
         else:
             # print(self.max_src_len, self.max_tgt_len, self.min_src_len, self.min_tgt_len)
+            # store the
+            self.src_sizes = src_sizes
+            self.tgt_sizes = tgt_sizes
 
             if self._type in ['audio', 'wav']:
                 self.batches = allocate_batch_unbalanced(sorted_order, data_lengths,
@@ -1033,6 +1036,10 @@ class Dataset(torch.utils.data.Dataset):
 
     def __len__(self):
         return self.num_batches
+
+    def get_length(self, sample_id):
+
+        return self.src_sizes[sample_id], self.tgt_sizes[sample_id]
 
     def __getitem__(self, index):
 

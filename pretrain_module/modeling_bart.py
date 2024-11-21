@@ -18,12 +18,15 @@ import math
 import random
 import warnings
 from typing import Optional, Tuple
+import numpy as np
 
 import torch
 import torch.utils.checkpoint
 from torch import nn
-from torch.nn import CrossEntropyLoss, MSELoss
+from torch.nn import Parameter
 from torch.cuda.amp import autocast
+
+from onmt.modules.optimized.linear import linear_function, factorize_linear
 
 from .activations import ACT2FN
 # from ...file_utils import (
@@ -128,12 +131,12 @@ class BartAttention(nn.Module):
     """Multi-headed attention from 'Attention Is All You Need' paper"""
 
     def __init__(
-        self,
-        embed_dim: int,
-        num_heads: int,
-        dropout: float = 0.0,
-        is_decoder: bool = False,
-        bias: bool = True,
+            self,
+            embed_dim: int,
+            num_heads: int,
+            dropout: float = 0.0,
+            is_decoder: bool = False,
+            bias: bool = True,
     ):
         super().__init__()
         self.embed_dim = embed_dim
@@ -141,7 +144,7 @@ class BartAttention(nn.Module):
         self.dropout = dropout
         self.head_dim = embed_dim // num_heads
         assert (
-            self.head_dim * num_heads == self.embed_dim
+                self.head_dim * num_heads == self.embed_dim
         ), f"embed_dim must be divisible by num_heads (got `embed_dim`: {self.embed_dim} and `num_heads`: {num_heads})."
         self.scaling = self.head_dim ** -0.5
         self.is_decoder = is_decoder
@@ -150,115 +153,617 @@ class BartAttention(nn.Module):
         self.v_proj = nn.Linear(embed_dim, embed_dim, bias=bias)
         self.q_proj = nn.Linear(embed_dim, embed_dim, bias=bias)
         self.out_proj = nn.Linear(embed_dim, embed_dim, bias=bias)
+        self.fast_attention = False
+
+        self.is_factorized = False
+        self.multiplicative_factorize = False
+        self.fast_factorize = False
+        self.flex_factorize = False
+
+        from onmt.modules.optimized.flash_mha import flash_bert_mha
+        self.fast_bert_mha = flash_bert_mha
 
     def _shape(self, tensor: torch.Tensor, seq_len: int, bsz: int):
         return tensor.view(bsz, seq_len, self.num_heads, self.head_dim).transpose(1, 2).contiguous()
 
+    def add_ensemble_weights(self, n_ensemble, rank=4, **kwargs):
+        """
+        Add ensemble weights for self-attention
+
+        :param: n_ensemble
+        :param: rank
+        """
+        # TODO
+        # embed_dim = self.embed_dim
+        # self.is_factorized = True
+        # self.multiplicative_factorize = multiplicative
+        # self.fast_factorize = fast
+        # self.flex_factorize = flexible
+        # self.dyrank = dyrank
+        #
+        # if multiplicative or flexible:
+        #     _rank = rank if fast else 1
+        #     self.rm_i = torch.nn.Parameter(torch.Tensor(n_languages, _rank, 3 * embed_dim))
+        #     self.sm_i = torch.nn.Parameter(torch.Tensor(n_languages, _rank, embed_dim))
+        #     self.rm_o = torch.nn.Parameter(torch.Tensor(n_languages, _rank, embed_dim))
+        #     self.sm_o = torch.nn.Parameter(torch.Tensor(n_languages, _rank, embed_dim))
+        #
+        #     constant = 1
+        #     nn.init.constant_(self.rm_i, constant)
+        #     nn.init.constant_(self.sm_i, constant)
+        #     nn.init.constant_(self.rm_o, constant)
+        #     nn.init.constant_(self.sm_o, constant)
+        #
+        # if not self.flex_factorize:
+        #
+        #     self.r_i = torch.nn.Parameter(torch.Tensor(n_languages, rank, 3 * embed_dim))
+        #     self.s_i = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
+        #     self.r_o = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
+        #     self.s_o = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
+        #
+        #     if self.dyrank:
+        #         nn.init.zeros_(self.r_i)
+        #         nn.init.normal_(self.s_i, 0.0, 0.02)
+        #         nn.init.zeros_(self.r_o)
+        #         nn.init.normal_(self.s_o, 0.0, 0.02)
+        #
+        #     else:
+        #         std = 0.01 if fast else 0.02
+        #         nn.init.normal_(self.r_i, 0.0, std)
+        #         nn.init.normal_(self.s_i, 0.0, std)
+        #         nn.init.normal_(self.r_o, 0.0, std)
+        #         nn.init.normal_(self.s_o, 0.0, std)
+
+    def convert_fast_attention(self):
+
+        # HuggingFace's MBart Attention uses a unoptimized memory layout that requires reshaping
+        # This re-organizes the memory to fit FastAttention and FlashAttention codes
+
+        if self.fast_attention:
+            return
+
+        self.fast_attention = True
+        w_q = self.q_proj.weight.clone()
+        w_k = self.k_proj.weight.clone()
+        w_v = self.v_proj.weight.clone()
+        weights = [w_q, w_k, w_v]
+        weight_ = torch.cat(weights, dim=0).contiguous()
+
+        b_q = self.q_proj.bias.clone()
+        b_k = self.k_proj.bias.clone()
+        b_v = self.v_proj.bias.clone()
+        biases = [b_q, b_k, b_v]
+        bias_ = torch.cat(biases, dim=0).contiguous()
+
+        head_dim = self.head_dim
+        heads = self.num_heads
+        input_dim = self.embed_dim
+
+        weight_ = weight_.reshape(3 * head_dim * heads, input_dim).view(3, heads, head_dim, input_dim).transpose(0, 1). \
+            reshape(-1, input_dim)
+
+        bias_ = bias_.reshape(3 * head_dim * heads).view(3, heads, head_dim).transpose(0, 1).reshape(-1)
+
+        weight_t = torch.Tensor(3 * input_dim, input_dim)
+        bias_t = torch.Tensor(3 * input_dim)
+        weight_t.copy_(weight_)
+        bias_t.copy_(bias_)
+        self.proj_weight = Parameter(weight_t)
+        self.proj_bias = Parameter(bias_t)
+
+        self.proj_weight.requires_grad = self.q_proj.weight.requires_grad
+        self.proj_bias.requires_grad = self.q_proj.bias.requires_grad
+        del self.q_proj, self.k_proj, self.v_proj
+
     def forward(
-        self,
-        hidden_states: torch.Tensor,
-        key_value_states: Optional[torch.Tensor] = None,
-        past_key_value: Optional[Tuple[torch.Tensor]] = None,
-        attention_mask: Optional[torch.Tensor] = None,
-        layer_head_mask: Optional[torch.Tensor] = None,
-        output_attentions: bool = False,
+            self,
+            hidden_states: torch.Tensor,
+            key_value_states: Optional[torch.Tensor] = None,
+            attention_mask: Optional[torch.Tensor] = None,
+            output_attentions: bool = False,
+            cu_seqlens=None, max_len=None,
+            lang=None, atb=None,
+            incremental=False, incremental_cache=None,
+            checkpointing=False, stacked_kv=None
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
         """Input shape: Batch x Time x Channel"""
 
-        # if key_value_states are provided this layer is used as a cross-attention layer
-        # for the decoder
-        is_cross_attention = key_value_states is not None
-        bsz, tgt_len, embed_dim = hidden_states.size()
+        if not self.fast_attention:
+            raise NotImplementedError("Slow attention by HuggingFace is deprecated.")
 
-        # get query proj
-        query_states = self.q_proj(hidden_states) * self.scaling
-        # get key, value proj
-        if is_cross_attention and past_key_value is not None:
-            # reuse k,v, cross_attentions
-            key_states = past_key_value[0]
-            value_states = past_key_value[1]
-        elif is_cross_attention:
-            # cross_attentions
-            key_states = self._shape(self.k_proj(key_value_states), -1, bsz)
-            value_states = self._shape(self.v_proj(key_value_states), -1, bsz)
-        elif past_key_value is not None:
-            # reuse k, v, self_attention
-            key_states = self._shape(self.k_proj(hidden_states), -1, bsz)
-            value_states = self._shape(self.v_proj(hidden_states), -1, bsz)
-            key_states = torch.cat([past_key_value[0], key_states], dim=2)
-            value_states = torch.cat([past_key_value[1], value_states], dim=2)
         else:
-            # self_attention
-            key_states = self._shape(self.k_proj(hidden_states), -1, bsz)
-            value_states = self._shape(self.v_proj(hidden_states), -1, bsz)
 
-        if self.is_decoder:
-            # if cross_attention save Tuple(torch.Tensor, torch.Tensor) of all cross attention key/value_states.
-            # Further calls to cross_attention layer can then reuse all cross-attention
-            # key/value_states (first "if" case)
-            # if uni-directional self-attention (decoder) save Tuple(torch.Tensor, torch.Tensor) of
-            # all previous decoder key/value_states. Further calls to uni-directional self-attention
-            # can concat previous decoder key/value_states to current projected key/value_states (third "elif" case)
-            # if encoder bi-directional self-attention `past_key_value` is always `None`
-            past_key_value = (key_states, value_states)
+            in_proj_weight = self.proj_weight
+            out_proj_weight = self.out_proj.weight
+            rm_i, sm_i, rm_o, sm_o = None, None, None, None
 
-        proj_shape = (bsz * self.num_heads, -1, self.head_dim)
-        query_states = self._shape(query_states, tgt_len, bsz).view(*proj_shape)
-        key_states = key_states.view(*proj_shape)
-        value_states = value_states.view(*proj_shape)
+            if self.is_factorized and self.flex_factorize:
 
-        src_len = key_states.size(1)
-        attn_weights = torch.bmm(query_states, key_states.transpose(1, 2))
+                n_languages, _rank = self.rm_o.size(0), self.rm_o.size(1)
 
-        if attn_weights.size() != (bsz * self.num_heads, tgt_len, src_len):
-            raise ValueError(
-                f"Attention weights should be of size {(bsz * self.num_heads, tgt_len, src_len)}, but is {attn_weights.size()}"
-            )
+                if lang.ndim == 1:
 
-        if attention_mask is not None:
-            if attention_mask.size() != (bsz, 1, tgt_len, src_len):
-                raise ValueError(
-                    f"Attention mask should be of size {(bsz, 1, tgt_len, src_len)}, but is {attention_mask.size()}"
-                )
-            attn_weights = attn_weights.view(bsz, self.num_heads, tgt_len, src_len) + attention_mask
-            attn_weights = attn_weights.view(bsz * self.num_heads, tgt_len, src_len)
+                    rm_i = torch.index_select(self.rm_i, 0, lang).squeeze(0)  # squeeze possible because only 1
+                    sm_i = torch.index_select(self.sm_i, 0, lang).squeeze(0)
+                    rm_o = torch.index_select(self.rm_o, 0, lang).squeeze(0)
+                    sm_o = torch.index_select(self.sm_o, 0, lang).squeeze(0)
 
-        attn_weights = nn.functional.softmax(attn_weights, dim=-1)
+                elif lang.ndim == 2:  # for flash attention with nested tensor
+                    rm_i = torch.mm(lang, self.rm_i.view(n_languages, _rank * self.rm_i.size(-1))).view(
+                        lang.size(0), _rank,
+                        self.rm_i.size(-1))
+                    sm_i = torch.mm(lang, self.sm_i.view(n_languages, _rank * self.sm_i.size(-1))).view(
+                        lang.size(0), _rank,
+                        self.sm_i.size(-1))
+                    rm_o = torch.mm(lang, self.rm_o.view(n_languages, _rank * self.rm_o.size(-1))).view(
+                        lang.size(0), _rank,
+                        self.rm_o.size(-1))
+                    sm_o = torch.mm(lang, self.sm_o.view(n_languages, _rank * self.sm_o.size(-1))).view(
+                        lang.size(0), _rank,
+                        self.sm_o.size(-1))
 
-        if layer_head_mask is not None:
-            if layer_head_mask.size() != (self.num_heads,):
-                raise ValueError(
-                    f"Head mask for a single layer should be of size {(self.num_heads,)}, but is {layer_head_mask.size()}"
-                )
-            attn_weights = layer_head_mask.view(1, -1, 1, 1) * attn_weights.view(bsz, self.num_heads, tgt_len, src_len)
-            attn_weights = attn_weights.view(bsz * self.num_heads, tgt_len, src_len)
+                elif lang.ndim == 3:
+                    _len, _bsz = lang.size(0), lang.size(1)
+                    _lang = lang.view(_len * _bsz, lang.size(-1))
+                    rm_i = torch.mm(_lang, self.rm_i.view(n_languages, _rank * self.rm_i.size(-1))).view(
+                        _len, _bsz, _rank, self.rm_i.size(-1))
+                    sm_i = torch.mm(_lang, self.sm_i.view(n_languages, _rank * self.sm_i.size(-1))).view(
+                        _len, _bsz, _rank, self.sm_i.size(-1))
+                    rm_o = torch.mm(_lang, self.rm_o.view(n_languages, _rank * self.rm_o.size(-1))).view(
+                        _len, _bsz, _rank, self.rm_o.size(-1))
+                    sm_o = torch.mm(_lang, self.sm_o.view(n_languages, _rank * self.sm_o.size(-1))).view(
+                        _len, _bsz, _rank, self.sm_o.size(-1))
 
-        if output_attentions:
-            # this operation is a bit awkward, but it's required to
-            # make sure that attn_weights keeps its gradient.
-            # In order to do so, attn_weights have to be reshaped
-            # twice and have to be reused in the following
-            attn_weights_reshaped = attn_weights.view(bsz, self.num_heads, tgt_len, src_len)
-            attn_weights = attn_weights_reshaped.view(bsz * self.num_heads, tgt_len, src_len)
+                if hidden_states.ndim == 3:
+                    use_time_mask = self.is_decoder
+                    bsz, qlen = hidden_states.size(1), hidden_states.size(0)
+                    mask = attention_mask
+                    low_precision = True  # Use CUDA impl
+
+                    input_lin_results = factorize_linear(hidden_states, in_proj_weight, self.proj_bias, rm_i, sm_i)
+
+                    attn_output, coverage = self_attn_compact_func(use_time_mask, self.training, self.num_heads,
+                                                                   input_lin_results,
+                                                                   mask, self.dropout,
+                                                                   False, None,
+                                                                   incremental, incremental_cache, low_precision,
+                                                                   True, checkpointing)
+
+                    attn_output = attn_output.view(qlen, bsz, -1).contiguous()
+
+                    output = factorize_linear(attn_output, out_proj_weight, self.out_proj.bias, rm_o, sm_o)
+
+                    return output, coverage, incremental_cache
+
+                else:
+                    """
+                    flash attention
+                    """
+                    assert self.fast_bert_mha is not None
+                    assert cu_seqlens is not None
+                    assert max_len is not None
+
+                    total_bsz = hidden_states.size(0)
+                    # qkv = linear_function(hidden_states, in_proj_weight, self.proj_bias)  # B x H
+                    qkv = factorize_linear(hidden_states, in_proj_weight, self.proj_bias, rm_i, sm_i)
+                    # B x 3 x H x d
+
+                    # TODO: moving to CUDA to remove overhead?
+                    qkv = qkv.view(total_bsz, self.num_heads, 3, self.head_dim).transpose(1, 2).contiguous()
+
+                    dropout_p = self.dropout if self.training else 0.0
+                    causal = self.is_decoder
+                    softmax_scale = 1.0 / math.sqrt(64)
+                    context = self.fast_bert_mha(qkv, cu_seqlens, max_len, dropout_p, softmax_scale, causal, False)
+                    coverage = None
+
+                    context = context.view(-1, self.num_heads * self.head_dim).contiguous()
+                    output = factorize_linear(context, out_proj_weight, self.out_proj.bias, rm_o, sm_o)
+
+                    return output, coverage, incremental_cache
+
+            # Code is twice as long TODO: merging two sections
+
+            else:
+                """
+                flash attention
+                """
+                assert self.fast_bert_mha is not None
+                assert cu_seqlens is not None
+                assert max_len is not None
+                # assert self.is_decoder is False  # only encoder
+                # sm = torch.cuda.get_device_capability()
+
+                # Only Ampere supported at the moment-
+                total_bsz = hidden_states.size(0)
+                qkv = linear_function(hidden_states, in_proj_weight, self.proj_bias)  # B x H
+                # B x 3 x H x d
+
+                # TODO: moving to CUDA to remove overhead?
+                # qkv = qkv.view(total_bsz, self.num_heads, 3, self.head_dim).transpose(1, 2).contiguous()
+
+                # context, coverage = self.fast_bert_mha(qkv, cu_seqlens, self.dropout, max_len, self.training)
+                qkv = qkv.view(total_bsz, self.num_heads, 3, self.head_dim).transpose(1, 2).contiguous()
+
+                dropout_p = self.dropout if self.training else 0.0
+                causal = self.is_decoder
+                softmax_scale = 1.0 / math.sqrt(64)
+                context = self.fast_bert_mha(qkv, cu_seqlens, max_len, dropout_p, softmax_scale, causal, False)
+                coverage = None
+
+                context = context.view(-1, self.num_heads * self.head_dim).contiguous()
+                outputs = linear_function(context, out_proj_weight, self.out_proj.bias)
+
+                attn_output = outputs
+
+            return attn_output, coverage, incremental_cache
+
+
+class BartCrossAttention(BartAttention):
+
+    def __init__(
+            self,
+            embed_dim: int,
+            num_heads: int,
+            dropout: float = 0.0,
+            is_decoder: bool = False,
+            bias: bool = True,
+            convert_fast_attention=False,
+            **kwargs
+    ):
+        super().__init__(embed_dim, num_heads, dropout, is_decoder, bias)
+
+        from onmt.modules.optimized.flash_mha import flash_encdec_mha
+        self.fast_bert_mha = flash_encdec_mha
+
+        if convert_fast_attention:
+            self.convert_fast_attention()
+
+    def convert_fast_attention(self):
+
+        if self.fast_attention:
+            return
+
+        self.fast_attention = True
+
+        # Merge weight KV into one
+        w_k = self.k_proj.weight.clone()
+        w_v = self.v_proj.weight.clone()
+        weights = [w_k, w_v]
+        weight_ = torch.cat(weights, dim=0).contiguous()
+
+        b_k = self.k_proj.bias.clone()
+        b_v = self.v_proj.bias.clone()
+        biases = [b_k, b_v]
+        bias_ = torch.cat(biases, dim=0).contiguous()
+
+        head_dim = self.head_dim
+        heads = self.num_heads
+        input_dim = self.embed_dim
+
+        weight_ = weight_.reshape(2 * head_dim * heads, input_dim).view(2, heads, head_dim, input_dim).transpose(0, 1). \
+            reshape(-1, input_dim)
+
+        bias_ = bias_.reshape(2 * head_dim * heads).view(2, heads, head_dim).transpose(0, 1).reshape(-1)
+
+        weight_t = torch.Tensor(2 * input_dim, input_dim)
+        bias_t = torch.Tensor(2 * input_dim)
+        weight_t.copy_(weight_)
+        bias_t.copy_(bias_)
+        self.proj_weight_kv = Parameter(weight_t)
+        self.proj_bias_kv = Parameter(bias_t)
+
+        self.proj_weight_kv.requires_grad = self.k_proj.weight.requires_grad
+        self.proj_bias_kv.requires_grad = self.k_proj.bias.requires_grad
+
+        del self.k_proj
+        del self.v_proj
+
+    def add_factorized_weights(self, n_languages, rank=4,
+                               multiplicative=False, fast=False,
+                               flexible=False, dyrank=False, **kwargs):
+
+        embed_dim = self.embed_dim
+        self.is_factorized = True
+        self.multiplicative_factorize = multiplicative
+        self.fast_factorize = fast
+        self.flex_factorize = flexible
+        self.dyrank = dyrank
+
+        # if not fast: the weights are calculated first
+        # W = W_S * (rm \dot sm) + (r \dot s)
+        # if fast: maybe using only W_S
+        # WX + b = W(rm \dot sm)X + b
+        #        = W(X \dot sm)rm + b
+
+        if multiplicative or self.flex_factorize:
+            _rank = rank if fast or flexible else 1
+            self.rm_q = torch.nn.Parameter(torch.Tensor(n_languages, _rank, embed_dim))
+            self.sm_q = torch.nn.Parameter(torch.Tensor(n_languages, _rank, embed_dim))
+            self.rm_kv = torch.nn.Parameter(torch.Tensor(n_languages, _rank, 2 * embed_dim))
+            self.sm_kv = torch.nn.Parameter(torch.Tensor(n_languages, _rank, embed_dim))
+            self.rm_o = torch.nn.Parameter(torch.Tensor(n_languages, _rank, embed_dim))
+            self.sm_o = torch.nn.Parameter(torch.Tensor(n_languages, _rank, embed_dim))
+
+            constant = 1
+            nn.init.constant_(self.rm_q, constant)
+            nn.init.constant_(self.sm_q, constant)
+            nn.init.constant_(self.rm_kv, constant)
+            nn.init.constant_(self.sm_kv, constant)
+            nn.init.constant_(self.rm_o, constant)
+            nn.init.constant_(self.sm_o, constant)
+
+        if not flexible:
+            self.r_q = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
+            self.s_q = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
+            self.r_kv = torch.nn.Parameter(torch.Tensor(n_languages, rank, 2 * embed_dim))
+            self.s_kv = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
+            self.r_o = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
+            self.s_o = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
+
+            if self.dyrank:
+                nn.init.zeros_(self.r_q)
+                nn.init.normal_(self.s_q, 0.0, 0.02)
+                nn.init.zeros_(self.r_kv)
+                nn.init.normal_(self.s_kv, 0.0, 0.02)
+                nn.init.zeros_(self.r_o)
+                nn.init.normal_(self.s_o, 0.0, 0.02)
+            else:
+                std = 0.01 if fast else 0.02
+                nn.init.normal_(self.r_q, 0.0, std)
+                nn.init.normal_(self.s_q, 0.0, std)
+                nn.init.normal_(self.r_kv, 0.0, std)
+                nn.init.normal_(self.s_kv, 0.0, std)
+                nn.init.normal_(self.r_o, 0.0, std)
+                nn.init.normal_(self.s_o, 0.0, std)
+
+    def forward(
+            self,
+            hidden_states: torch.Tensor,
+            key_value_states: Optional[torch.Tensor] = None,
+            attention_mask: Optional[torch.Tensor] = None,
+            output_attentions: bool = False,
+            lang=None, checkpointing=False,
+            src_lang=None,
+            incremental=False, incremental_cache=None,
+            cu_seqlens=None, max_len=None,
+            cu_seqlens_kv=None, max_len_kv=None, stacked_kv=None, **kwargs
+    ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
+        """Input shape: Batch x Time x Channel"""
+
+        assert key_value_states is not None
+        if not self.fast_attention:
+            raise NotImplementedError("Slow Attention by HuggingFace not supported anymore")
+
         else:
-            attn_weights_reshaped = None
+            in_proj_weight_q = self.q_proj.weight
+            in_proj_weight_kv = self.proj_weight_kv
+            out_proj_weight = self.out_proj.weight
 
-        attn_probs = nn.functional.dropout(attn_weights, p=self.dropout, training=self.training)
+            if self.is_factorized and self.flex_factorize:
 
-        attn_output = torch.bmm(attn_probs, value_states)
+                # TODO: mm instead of index select
+                n_languages, _rank = self.rm_o.size(0), self.rm_o.size(1)
 
-        if attn_output.size() != (bsz * self.num_heads, tgt_len, self.head_dim):
-            raise ValueError(
-                f"`attn_output` should be of size {(bsz, self.num_heads, tgt_len, self.head_dim)}, but is {attn_output.size()}"
-            )
+                # if lang has only 1 element we can do this
+                if lang.ndim == 1:
 
-        attn_output = attn_output.view(bsz, self.num_heads, tgt_len, self.head_dim)
-        attn_output = attn_output.transpose(1, 2)
-        attn_output = attn_output.reshape(bsz, tgt_len, embed_dim)
+                    rm_q = torch.index_select(self.rm_q, 0, lang.long()).squeeze(0)  # squeeze possible because only 1
+                    sm_q = torch.index_select(self.sm_q, 0, lang.long()).squeeze(0)
+                    rm_o = torch.index_select(self.rm_o, 0, lang.long()).squeeze(0)
+                    sm_o = torch.index_select(self.sm_o, 0, lang.long()).squeeze(0)
 
-        attn_output = self.out_proj(attn_output)
 
-        return attn_output, attn_weights_reshaped, past_key_value
+                elif lang.ndim == 2:  # for flash attention
+
+                    rm_q = torch.mm(lang, self.rm_q.view(n_languages, _rank * self.rm_q.size(-1))).view(
+                        lang.size(0), _rank,
+                        self.rm_q.size(-1))
+                    sm_q = torch.mm(lang, self.sm_q.view(n_languages, _rank * self.sm_q.size(-1))).view(
+                        lang.size(0), _rank,
+                        self.sm_q.size(-1))
+                    rm_o = torch.mm(lang, self.rm_o.view(n_languages, _rank * self.rm_o.size(-1))).view(
+                        lang.size(0), _rank,
+                        self.rm_o.size(-1))
+                    sm_o = torch.mm(lang, self.sm_o.view(n_languages, _rank * self.sm_o.size(-1))).view(
+                        lang.size(0), _rank,
+                        self.sm_o.size(-1))
+
+                elif lang.ndim == 3:
+
+                    _len, _bsz = lang.size(0), lang.size(1)
+                    _lang = lang.view(_len * _bsz, lang.size(-1))
+
+                    rm_q = torch.mm(_lang, self.rm_q.view(n_languages, _rank * self.rm_q.size(-1))).view(
+                        _len, _bsz, _rank, self.rm_q.size(-1))
+                    sm_q = torch.mm(_lang, self.sm_q.view(n_languages, _rank * self.sm_q.size(-1))).view(
+                        _len, _bsz, _rank, self.sm_q.size(-1))
+                    rm_o = torch.mm(_lang, self.rm_o.view(n_languages, _rank * self.rm_o.size(-1))).view(
+                        _len, _bsz, _rank, self.rm_o.size(-1))
+                    sm_o = torch.mm(_lang, self.sm_o.view(n_languages, _rank * self.sm_o.size(-1))).view(
+                        _len, _bsz, _rank, self.sm_o.size(-1))
+                else:
+                    raise NotImplementedError("Unknown dimension for language IDs")
+
+                if src_lang.ndim == 1:
+                    rm_kv = torch.index_select(self.rm_kv, 0, src_lang.long()).squeeze(
+                        0)  # squeeze possible because only 1
+                    sm_kv = torch.index_select(self.sm_kv, 0, src_lang.long()).squeeze(0)
+                elif src_lang.ndim == 2:
+                    rm_kv = torch.mm(src_lang, self.rm_kv.view(n_languages, _rank * self.rm_kv.size(-1))).view(
+                        src_lang.size(0), _rank,
+                        self.rm_kv.size(-1))
+                    sm_kv = torch.mm(src_lang, self.sm_kv.view(n_languages, _rank * self.sm_kv.size(-1))).view(
+                        src_lang.size(0), _rank,
+                        self.sm_kv.size(-1))
+                elif src_lang.ndim == 3:
+                    _len_src = src_lang.size(0)
+                    _src_lang = src_lang.view(_len_src * _bsz, src_lang.size(-1))
+                    rm_kv = torch.mm(_src_lang, self.rm_kv.view(n_languages, _rank * self.rm_kv.size(-1))).view(
+                        _len_src, _bsz, _rank, self.rm_kv.size(-1))
+                    sm_kv = torch.mm(_src_lang, self.sm_kv.view(n_languages, _rank * self.sm_kv.size(-1))).view(
+                        _len_src, _bsz, _rank, self.sm_kv.size(-1))
+
+                # if lang has size [T x B x L] we need to do a GEMM
+
+                if hidden_states.ndim == 3:
+                    use_time_mask = self.is_decoder
+                    bsz, qlen = hidden_states.size(1), hidden_states.size(0)
+                    mask = attention_mask
+                    low_precision = True  # Use CUDA impl
+
+                    input_lin_q_results = factorize_linear(hidden_states, in_proj_weight_q, self.q_proj.bias, rm_q,
+                                                           sm_q)
+
+                    input_lin_kv_results = factorize_linear(key_value_states, in_proj_weight_kv, self.proj_bias_kv,
+                                                            rm_kv, sm_kv)
+
+                    recompute = False
+                    attn_output, coverage = encdec_attn_bias_compact_func(recompute, self.training, self.num_heads,
+                                                                          input_lin_q_results, input_lin_kv_results,
+                                                                          attention_mask, self.dropout,
+                                                                          incremental, incremental_cache,
+                                                                          False, None, None,  # no rotary encodings
+                                                                          low_precision, True)
+
+                    attn_output = attn_output.view(qlen, bsz, -1).contiguous()
+
+                    output = factorize_linear(attn_output, out_proj_weight, self.out_proj.bias, rm_o, sm_o)
+
+                    return output, coverage, incremental_cache
+
+                else:
+                    """
+                    flash attention
+                    """
+                    assert self.fast_bert_mha is not None
+                    assert cu_seqlens is not None
+                    assert cu_seqlens_kv is not None
+                    assert max_len is not None
+                    assert max_len_kv is not None
+                    assert incremental == False
+                    assert incremental_cache is None
+
+                    total_bsz_q = hidden_states.size(0)
+                    total_bsz_kv = key_value_states.size(0)
+                    q = factorize_linear(hidden_states, in_proj_weight_q, self.q_proj.bias, rm_q, sm_q)
+                    # linear_function(hidden_states, in_proj_weight_q, self.q_proj.bias)
+
+                    kv = factorize_linear(key_value_states, in_proj_weight_kv, self.proj_bias_kv, rm_kv, sm_kv)  #
+                    # linear_function(key_value_states, in_proj_weight_kv, self.proj_bias_kv)
+
+                    kv = kv.view(total_bsz_kv, self.num_heads, 2, self.head_dim).transpose(1, 2).contiguous()
+
+                    q = q.view(total_bsz_q, self.num_heads, self.head_dim)
+
+                    dropout_p = self.dropout if self.training else 0.0
+                    causal = False
+                    softmax_scale = 1.0 / math.sqrt(64)
+                    context = self.fast_bert_mha(q, kv, cu_seqlens, cu_seqlens_kv,
+                                                 max_len, max_len_kv, dropout_p, softmax_scale, causal, False)
+
+                    context = context.view(-1, self.num_heads * self.head_dim).contiguous()
+                    # output = linear_function(context, out_proj_weight, self.out_proj.bias)
+                    output = factorize_linear(context, out_proj_weight, self.out_proj.bias, rm_o, sm_o)
+
+                    coverage = None
+
+                    return output, coverage, incremental_cache
+
+            if self.is_factorized:
+                if self.multiplicative_factorize:
+                    rm_q = torch.index_select(self.rm_q, 0, lang).squeeze(0)  # squeeze possible because only 1
+                    sm_q = torch.index_select(self.sm_q, 0, lang).squeeze(0)
+                    rm_kv = torch.index_select(self.rm_kv, 0, lang).squeeze(0)  # squeeze possible because only 1
+                    sm_kv = torch.index_select(self.sm_kv, 0, lang).squeeze(0)
+                    rm_o = torch.index_select(self.rm_o, 0, lang).squeeze(0)
+                    sm_o = torch.index_select(self.sm_o, 0, lang).squeeze(0)
+
+                    if self.dyrank:
+                        mul_factor_q = torch.mm(rm_q.t(), sm_q)
+                        mul_factor_kv = torch.mm(rm_kv.t(), sm_kv)
+                        mul_factor_out = torch.mm(rm_o.t(), sm_o)
+                    else:
+                        mul_factor_q = torch.bmm(rm_q.unsqueeze(-1), sm_q.unsqueeze(1)).sum(dim=0)
+                        mul_factor_kv = torch.bmm(rm_kv.unsqueeze(-1), sm_kv.unsqueeze(1)).sum(dim=0)
+                        mul_factor_out = torch.bmm(rm_o.unsqueeze(-1), sm_o.unsqueeze(1)).sum(dim=0)
+
+                    in_proj_weight_q = in_proj_weight_q * mul_factor_q
+                    in_proj_weight_kv = in_proj_weight_kv * mul_factor_kv
+                    out_proj_weight = out_proj_weight * mul_factor_out
+
+                r_q = torch.index_select(self.r_q, 0, lang).squeeze(0)
+                s_q = torch.index_select(self.s_q, 0, lang).squeeze(0)
+                r_kv = torch.index_select(self.r_kv, 0, lang).squeeze(0)
+                s_kv = torch.index_select(self.s_kv, 0, lang).squeeze(0)
+                r_o = torch.index_select(self.r_o, 0, lang).squeeze(0)
+                s_o = torch.index_select(self.s_o, 0, lang).squeeze(0)
+
+                if self.dyrank:
+                    add_factor_q = torch.mm(r_q.t(), s_q)
+                    add_factor_kv = torch.mm(r_kv.t(), s_kv)
+                    add_factor_out = torch.mm(r_o.t(), s_o)
+                else:
+                    add_factor_q = torch.bmm(r_q.unsqueeze(-1), s_q.unsqueeze(1)).sum(dim=0)
+                    add_factor_kv = torch.bmm(r_kv.unsqueeze(-1), s_kv.unsqueeze(1)).sum(dim=0)
+                    add_factor_out = torch.bmm(r_o.unsqueeze(-1), s_o.unsqueeze(1)).sum(dim=0)
+
+                # Has to be additive here
+                in_proj_weight_q = in_proj_weight_q + add_factor_q
+                in_proj_weight_kv = in_proj_weight_kv + add_factor_kv
+                out_proj_weight = out_proj_weight + add_factor_out
+
+            if hidden_states.ndim == 3 and key_value_states.ndim == 3:
+
+                recompute = checkpointing
+                key_value_states = key_value_states
+
+                # TODO: Add factorize
+
+                # attention_mask should have size Bxlen_k
+                low_precision = True
+
+                attn_output, coverage = encdec_attn_bias_func(recompute, self.training, self.num_heads,
+                                                              hidden_states, key_value_states,
+                                                              in_proj_weight_q, in_proj_weight_kv, out_proj_weight,
+                                                              self.q_proj.bias, self.proj_bias_kv, self.out_proj.bias,
+                                                              attention_mask, self.dropout,
+                                                              incremental, incremental_cache,
+                                                              False, None, None,  # no rotary encodings
+                                                              low_precision, True)
+
+            elif hidden_states.ndim == 2 and key_value_states.ndim == 2:
+
+                assert self.fast_bert_mha is not None
+                assert cu_seqlens is not None
+                assert cu_seqlens_kv is not None
+                assert max_len is not None
+                assert max_len_kv is not None
+                assert incremental == False
+                assert incremental_cache is None
+
+                total_bsz_q = hidden_states.size(0)
+                total_bsz_kv = key_value_states.size(0)
+                q = linear_function(hidden_states, in_proj_weight_q, self.q_proj.bias)
+
+                kv = linear_function(key_value_states, in_proj_weight_kv, self.proj_bias_kv)
+
+                kv = kv.view(total_bsz_kv, self.num_heads, 2, self.head_dim).transpose(1, 2).contiguous()
+
+                q = q.view(total_bsz_q, self.num_heads, self.head_dim)
+
+                dropout_p = self.dropout if self.training else 0.0
+                causal = False
+                softmax_scale = 1.0 / math.sqrt(64)
+                context = self.fast_bert_mha(q, kv, cu_seqlens, cu_seqlens_kv,
+                                             max_len, max_len_kv, dropout_p, softmax_scale, causal, False)
+
+                context = context.view(-1, self.num_heads * self.head_dim).contiguous()
+                attn_output = linear_function(context, out_proj_weight, self.out_proj.bias)
+
+                coverage = None
+
+        return attn_output, coverage, incremental_cache
 
 
 class BartEncoderLayer(nn.Module):
@@ -346,11 +851,10 @@ class BartDecoderLayer(nn.Module):
         self.activation_dropout = config.activation_dropout
 
         self.self_attn_layer_norm = nn.LayerNorm(self.embed_dim)
-        self.encoder_attn = BartAttention(
+        self.encoder_attn = BartCrossAttention(
             self.embed_dim,
             config.decoder_attention_heads,
-            dropout=config.attention_dropout,
-            is_decoder=True,
+            dropout=config.attention_dropout
         )
         self.encoder_attn_layer_norm = nn.LayerNorm(self.embed_dim)
         self.fc1 = nn.Linear(self.embed_dim, config.decoder_ffn_dim)
@@ -358,6 +862,7 @@ class BartDecoderLayer(nn.Module):
         self.final_layer_norm = nn.LayerNorm(self.embed_dim)
 
         self.fused = False
+        self.fused_function = None
         if self.activation_fn_name == 'relu':
             from onmt.modules.mlp.mlp import mlp_relu_function
             if mlp_relu_function is not None:
@@ -371,15 +876,24 @@ class BartDecoderLayer(nn.Module):
 
     def forward(
         self,
+        # hidden_states: torch.Tensor,
+        # attention_mask: Optional[torch.Tensor] = None,
+        # encoder_hidden_states: Optional[torch.Tensor] = None,
+        # encoder_attention_mask: Optional[torch.Tensor] = None,
+        # layer_head_mask: Optional[torch.Tensor] = None,
+        # cross_attn_layer_head_mask: Optional[torch.Tensor] = None,
+        # past_key_value: Optional[Tuple[torch.Tensor]] = None,
+        # output_attentions: Optional[bool] = False,
+        # use_cache: Optional[bool] = True,
         hidden_states: torch.Tensor,
         attention_mask: Optional[torch.Tensor] = None,
         encoder_hidden_states: Optional[torch.Tensor] = None,
         encoder_attention_mask: Optional[torch.Tensor] = None,
-        layer_head_mask: Optional[torch.Tensor] = None,
-        cross_attn_layer_head_mask: Optional[torch.Tensor] = None,
-        past_key_value: Optional[Tuple[torch.Tensor]] = None,
         output_attentions: Optional[bool] = False,
-        use_cache: Optional[bool] = True,
+        incremental: Optional[bool] = False,
+        incremental_cache=None,
+        max_len=None, cu_seqlens=None,
+        max_len_kv=None, cu_seqlens_kv=None, **kwargs
     ):
         """
         Args:
@@ -402,41 +916,37 @@ class BartDecoderLayer(nn.Module):
 
         # Self Attention
         # decoder uni-directional self-attention cached key/values tuple is at positions 1,2
-        self_attn_past_key_value = past_key_value[:2] if past_key_value is not None else None
         # add present self-attn cache to positions 1,2 of present_key_value tuple
-        hidden_states, self_attn_weights, present_key_value = self.self_attn(
+        hidden_states, self_attn_weights, _ = self.self_attn(
             hidden_states=hidden_states,
-            past_key_value=self_attn_past_key_value,
             attention_mask=attention_mask,
-            layer_head_mask=layer_head_mask,
             output_attentions=output_attentions,
+            incremental=incremental, incremental_cache=incremental_cache,
+            cu_seqlens=cu_seqlens, max_len=max_len
         )
         hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
         hidden_states = residual + hidden_states
         hidden_states = self.self_attn_layer_norm(hidden_states)
 
         # Cross-Attention Block
-        cross_attn_present_key_value = None
         cross_attn_weights = None
         if encoder_hidden_states is not None:
             residual = hidden_states
+            hidden_states = self.encoder_attn_layer_norm(hidden_states)
+            attention_input = hidden_states
 
-            # cross_attn cached key/values tuple is at positions 3,4 of present_key_value tuple
-            cross_attn_past_key_value = past_key_value[-2:] if past_key_value is not None else None
-            hidden_states, cross_attn_weights, cross_attn_present_key_value = self.encoder_attn(
-                hidden_states=hidden_states,
+            hidden_states, cross_attn_weights, incremental_cache = self.encoder_attn(
+                hidden_states=attention_input,
                 key_value_states=encoder_hidden_states,
                 attention_mask=encoder_attention_mask,
-                layer_head_mask=cross_attn_layer_head_mask,
-                past_key_value=cross_attn_past_key_value,
                 output_attentions=output_attentions,
+                incremental=incremental, incremental_cache=incremental_cache,
+                cu_seqlens=cu_seqlens, max_len=max_len,
+                cu_seqlens_kv=cu_seqlens_kv, max_len_kv=max_len_kv
             )
-            hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
-            hidden_states = residual + hidden_states
-            hidden_states = self.encoder_attn_layer_norm(hidden_states)
 
-            # add cross-attn to positions 3,4 of present_key_value tuple
-            present_key_value = present_key_value + cross_attn_present_key_value
+            hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
+            hidden_states = hidden_states + residual
 
         # Fully Connected
         residual = hidden_states
@@ -466,34 +976,8 @@ class BartDecoderLayer(nn.Module):
         if output_attentions:
             outputs += (self_attn_weights, cross_attn_weights)
 
-        if use_cache:
-            outputs += (present_key_value,)
-
         return outputs
 
-
-class BartClassificationHead(nn.Module):
-    """Head for sentence-level classification tasks."""
-
-    def __init__(
-        self,
-        input_dim: int,
-        inner_dim: int,
-        num_classes: int,
-        pooler_dropout: float,
-    ):
-        super().__init__()
-        self.dense = nn.Linear(input_dim, inner_dim)
-        self.dropout = nn.Dropout(p=pooler_dropout)
-        self.out_proj = nn.Linear(inner_dim, num_classes)
-
-    def forward(self, hidden_states: torch.Tensor):
-        hidden_states = self.dropout(hidden_states)
-        hidden_states = self.dense(hidden_states)
-        hidden_states = torch.tanh(hidden_states)
-        hidden_states = self.dropout(hidden_states)
-        hidden_states = self.out_proj(hidden_states)
-        return hidden_states
 
 
 class BartPretrainedModel(PreTrainedModel):
@@ -932,10 +1416,9 @@ class BartDecoder(BartPretrainedModel):
         cross_attn_head_mask=None,
         past_key_values=None,
         inputs_embeds=None,
-        use_cache=None,
         output_attentions=None,
         output_hidden_states=None,
-        return_dict=None,
+        **kwargs
     ):
         r"""
         Args:
@@ -1009,8 +1492,6 @@ class BartDecoder(BartPretrainedModel):
         output_hidden_states = (
             output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
         )
-        use_cache = use_cache if use_cache is not None else self.config.use_cache
-        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
         # retrieve input_ids and inputs_embeds
         if input_ids is not None and inputs_embeds is not None:
@@ -1029,9 +1510,14 @@ class BartDecoder(BartPretrainedModel):
         if inputs_embeds is None:
             inputs_embeds = self.embed_tokens(input_ids) * self.embed_scale
 
-        attention_mask = self._prepare_decoder_attention_mask(
-            attention_mask, input_shape, inputs_embeds, past_key_values_length
-        )
+        bsz = input_ids.size(0)
+        qlen = input_ids.size(1)
+        klen = qlen
+
+        # if attention_mask is None:
+        padding_mask = attention_mask
+        attention_mask = torch.triu(
+            inputs_embeds.new_ones(qlen, klen), diagonal=1).bool()
 
         # expand encoder attention mask
         if encoder_hidden_states is not None and encoder_attention_mask is not None:
@@ -1050,68 +1536,74 @@ class BartDecoder(BartPretrainedModel):
         all_hidden_states = () if output_hidden_states else None
         all_self_attns = () if output_attentions else None
         all_cross_attentions = () if (output_attentions and encoder_hidden_states is not None) else None
-        next_decoder_cache = () if use_cache else None
 
-        # check if head_mask/cross_attn_head_mask has a correct number of layers specified if desired
-        for attn_mask, mask_name in zip([head_mask, cross_attn_head_mask], ["head_mask", "cross_attn_head_mask"]):
-            if attn_mask is not None:
-                assert attn_mask.size()[0] == (
-                    len(self.layers)
-                ), f"The `{mask_name}` should be specified for {len(self.layers)} layers, but it is for {head_mask.size()[0]}."
+        assert encoder_hidden_states.size(1) == hidden_states.size(
+            0), "batch size has to match between Enc and Dec states"
+
+        if self.fast_bert_mha is not None and hidden_states.dtype == torch.half:
+            can_run_fast_bert_mha = True
+
+            # lets unpad both hidden_states and context states
+            if padding_mask is None:
+                padding_mask = input_ids.new_zeros(bsz, qlen)
+            padding_mask = padding_mask.contiguous().long()
+            lengths = (1 - padding_mask).sum(dim=1)
+            lengths = lengths.cpu().tolist()  # list of lengths for B seqs
+            hidden_states = hidden_states.view(-1, hidden_states.size(-1))
+            non_pad_indices = torch.nonzero(padding_mask.view(-1).ne(1)).squeeze(1)
+            hidden_states = hidden_states.index_select(0, non_pad_indices)
+            max_len = max(lengths)
+            # cumulative sequence lengths (required input for fmha)
+            a = torch.tensor(np.array([0] + lengths), dtype=torch.int32)
+            cu_seqlens = torch.cumsum(a, 0).to(dtype=torch.int32, device=hidden_states.device)
+            non_pad_indices_q = non_pad_indices
+
+            # unpad the context
+            encoder_hidden_states = encoder_hidden_states.transpose(0, 1).contiguous()
+            padding_mask = encoder_attention_mask
+            context_len = encoder_hidden_states.size(1)
+            if padding_mask is None:
+                padding_mask = input_ids.new_zeros(bsz, context_len)
+            padding_mask = padding_mask.long()
+            lengths = (1 - padding_mask).sum(dim=1)
+            lengths = lengths.cpu().tolist()  # list of lengths for B seqs
+            encoder_hidden_states = encoder_hidden_states.view(-1, encoder_hidden_states.size(-1))
+            non_pad_indices = torch.nonzero(padding_mask.view(-1).ne(1)).squeeze(1)
+            encoder_hidden_states = encoder_hidden_states.index_select(0, non_pad_indices)
+
+            max_len_kv = max(lengths)
+            # cumulative sequence lengths (required input for fmha)
+            a = torch.tensor(np.array([0] + lengths), dtype=torch.int32)
+            cu_seqlens_kv = torch.cumsum(a, 0).to(dtype=torch.int32, device=encoder_hidden_states.device)
+
+        else:
+            max_len, cu_seqlens = None, None
+            max_len_kv, cu_seqlens_kv = None, None
+            non_pad_indices_q = None
+            can_run_fast_bert_mha = False
+
+            hidden_states = hidden_states.transpose(0, 1).contiguous()
+
         for idx, decoder_layer in enumerate(self.layers):
-            # add LayerDrop (see https://arxiv.org/abs/1909.11556 for description)
             if output_hidden_states:
                 all_hidden_states += (hidden_states,)
-            dropout_probability = random.uniform(0, 1)
-            if self.training and (dropout_probability < self.layerdrop):
-                continue
 
-            past_key_value = past_key_values[idx] if past_key_values is not None else None
+            # Stochastic Layer (only applicable when not predicting language or idx > 0)
+            if not (self.predict_language > 0 and idx == 0):
+                dropout_probability = random.uniform(0, 1)
+                if self.training and (dropout_probability < self.layerdrop):
+                    continue
 
-            if self.gradient_checkpointing and self.training:
-
-                if use_cache:
-                    logger.warning(
-                        "`use_cache=True` is incompatible with gradient checkpointing. Setting `use_cache=False`..."
-                    )
-                    use_cache = False
-
-                def create_custom_forward(module):
-                    def custom_forward(*inputs):
-                        # None for past_key_value
-                        return module(*inputs, output_attentions, use_cache)
-
-                    return custom_forward
-
-                layer_outputs = torch.utils.checkpoint.checkpoint(
-                    create_custom_forward(decoder_layer),
-                    hidden_states,
-                    attention_mask,
-                    encoder_hidden_states,
-                    encoder_attention_mask,
-                    head_mask[idx] if head_mask is not None else None,
-                    cross_attn_head_mask[idx] if cross_attn_head_mask is not None else None,
-                    None,
-                )
-            else:
-
-                layer_outputs = decoder_layer(
-                    hidden_states,
-                    attention_mask=attention_mask,
-                    encoder_hidden_states=encoder_hidden_states,
-                    encoder_attention_mask=encoder_attention_mask,
-                    layer_head_mask=(head_mask[idx] if head_mask is not None else None),
-                    cross_attn_layer_head_mask=(
-                        cross_attn_head_mask[idx] if cross_attn_head_mask is not None else None
-                    ),
-                    past_key_value=past_key_value,
-                    output_attentions=output_attentions,
-                    use_cache=use_cache,
-                )
+            layer_outputs, _ = decoder_layer(
+                hidden_states,
+                attention_mask=attention_mask,
+                encoder_hidden_states=encoder_hidden_states,
+                encoder_attention_mask=encoder_attention_mask,
+                output_attentions=output_attentions,
+                max_len=max_len, cu_seqlens=cu_seqlens,
+                max_len_kv=max_len_kv, cu_seqlens_kv=cu_seqlens_kv,
+            )
             hidden_states = layer_outputs[0]
-
-            if use_cache:
-                next_decoder_cache += (layer_outputs[3 if output_attentions else 1],)
 
             if output_attentions:
                 all_self_attns += (layer_outputs[1],)
@@ -1123,821 +1615,100 @@ class BartDecoder(BartPretrainedModel):
         if output_hidden_states:
             all_hidden_states += (hidden_states,)
 
-        next_cache = next_decoder_cache if use_cache else None
-        if not return_dict:
-            return tuple(
-                v
-                for v in [hidden_states, next_cache, all_hidden_states, all_self_attns, all_cross_attentions]
-                if v is not None
-            )
-        return BaseModelOutputWithPastAndCrossAttentions(
-            last_hidden_state=hidden_states,
-            past_key_values=next_cache,
-            hidden_states=all_hidden_states,
-            attentions=all_self_attns,
-            cross_attentions=all_cross_attentions,
+        return tuple(
+            v
+            for v in [hidden_states, next_cache, all_hidden_states, all_self_attns, all_cross_attentions]
+            if v is not None
         )
 
     def step(self, input, decoder_state, **kwargs):
 
         # context is stored in the decoder state in [T B H] format
-        encoder_hidden_states = decoder_state.context.transpose(0, 1)
+        encoder_hidden_states = decoder_state.context
 
-        # buffers = decoder_state.attention_buffers
-        lang = decoder_state.tgt_lang
-        src_lang = decoder_state.src_lang
+        buffers = decoder_state.attention_buffers
         buffering = decoder_state.buffering
 
-        # decoder_state.input_seq = torch.cat([decoder_state.input_seq, input], 0)
-        # input_ids = decoder_state.input_seq.transpose(0, 1)  # T x B -> B x T
         input_ids = input
         input_shape = input_ids.size()
-        inputs_embeds = self.embed_tokens(input_ids) * self.embed_scale
+        time_step = input.size(1)
 
-        # TODO: adding buffers\
-        past_key_values_length = 0
+        input_ = input
+        if buffering:
+            # use the last value of input to continue decoding
+            if input.size(1) > 1 and len(buffers) > 0:
+                # if buffers has not been initilized and we have > 1 input length data
+                # then its a prefix decoding step
+                input_ = input[:, -1:]
+                past_key_values_length = input.size(1) - 1
+            else:
+                past_key_values_length = 0
+        else:
+            past_key_values_length = 0
 
-        attention_mask = input_ids.ne(onmt.constants.TGT_PAD).long()
+        inputs_embeds = self.embed_tokens(input_) * self.embed_scale
 
-        attention_mask = self._prepare_decoder_attention_mask(
-            attention_mask, input_shape, inputs_embeds, past_key_values_length
-        )
+        # TODO: adding buffers
+        qlen = input_ids.size(1)
+        klen = qlen
+        attention_mask = torch.triu(
+            inputs_embeds.new_ones(qlen, klen), diagonal=1).bool()
 
-        # expand encoder attention mask
+        if input.size(1) > 1 and len(buffers) > 0:
+            attention_mask = attention_mask[-1:, :]
+
         encoder_attention_mask = decoder_state.src_mask
-        if encoder_hidden_states is not None and encoder_attention_mask is not None:
-            # [bsz, seq_len] -> [bsz, 1, tgt_seq_len, src_seq_len]
-            encoder_attention_mask = _expand_mask(encoder_attention_mask, inputs_embeds.dtype, tgt_len=input_shape[-1])
-
+        if not self.layers[0].encoder_attn.fast_attention:
+            raise NotImplementedError
+        else:
+            encoder_attention_mask = encoder_attention_mask.bool()
         # embed positions
         positions = self.embed_positions(input_shape, past_key_values_length)
 
         hidden_states = inputs_embeds + positions
         hidden_states = self.layernorm_embedding(hidden_states)
 
-        # decoder layers
-        all_cross_attentions = ()
+        hidden_states = hidden_states.transpose(0, 1)
 
-        head_mask, cross_attn_head_mask = None, None
-        # check if head_mask/cross_attn_head_mask has a correct number of layers specified if desired
-        for attn_mask, mask_name in zip([head_mask, cross_attn_head_mask], ["head_mask", "cross_attn_head_mask"]):
-            if attn_mask is not None:
-                assert attn_mask.size()[0] == (
-                    len(self.layers)
-                ), f"The `{mask_name}` should be specified for {len(self.layers)} layers, but it is for {head_mask.size()[0]}."
+        # decoder layers
         for idx, decoder_layer in enumerate(self.layers):
 
-            # past_key_value = past_key_values[idx] if past_key_values is not None else None
+            if buffering:
+                buffer = buffers[idx] if idx in buffers else None
+            else:
+                buffer = None
 
-            layer_outputs = decoder_layer(
+            layer_outputs, buffer = decoder_layer(
                 hidden_states,
                 attention_mask=attention_mask,
                 encoder_hidden_states=encoder_hidden_states,
                 encoder_attention_mask=encoder_attention_mask,
-                layer_head_mask=(head_mask[idx] if head_mask is not None else None),
-                cross_attn_layer_head_mask=(
-                    cross_attn_head_mask[idx] if cross_attn_head_mask is not None else None
-                ),
-                past_key_value=None,
-                output_attentions=True,
-                use_cache=False,
+                output_attentions=None,
+                incremental=buffering, incremental_cache=buffer,
             )
+
+            # layer_outputs = decoder_layer(
+            #     hidden_states,
+            #     attention_mask=attention_mask,
+            #     encoder_hidden_states=encoder_hidden_states,
+            #     encoder_attention_mask=encoder_attention_mask,
+            #     layer_head_mask=(head_mask[idx] if head_mask is not None else None),
+            #     cross_attn_layer_head_mask=(
+            #         cross_attn_head_mask[idx] if cross_attn_head_mask is not None else None
+            #     ),
+            #     past_key_value=None,
+            #     output_attentions=True,
+            #     use_cache=False,
+            # )
             hidden_states = layer_outputs[0]
 
-            all_cross_attentions += (layer_outputs[2],)
+        output = hidden_states[-1].unsqueeze(0)
+        coverage = hidden_states.new(hidden_states.size(1), 1, encoder_hidden_states.size(0)).zero_()
 
-        output = hidden_states.transpose(0, 1).contiguous()[-1].unsqueeze(0)
-        all_cross_attentions = ()
-        # if use_cache:
-        #     next_decoder_cache += (layer_outputs[3 if output_attentions else 1],)
-        #
-        # if output_attentions:
-        #     all_self_attns += (layer_outputs[1],)
-        #
-        coverage = all_cross_attentions
-
-        # raise NotImplementedError
         output_dict = defaultdict(lambda: None)
         output_dict['hidden'] = output
         output_dict['coverage'] = coverage
-        output_dict['context'] = encoder_hidden_states.transpose(0, 1)
+        output_dict['context'] = encoder_hidden_states
 
         return output_dict
 
-
-# @add_start_docstrings(
-#     "The bare BART Model outputting raw hidden-states without any specific head on top.",
-#     BART_START_DOCSTRING,
-# )
-class BartModel(BartPretrainedModel):
-    def __init__(self, config: BartConfig):
-        super().__init__(config)
-
-        padding_idx, vocab_size = config.pad_token_id, config.vocab_size
-        self.shared = nn.Embedding(vocab_size, config.d_model, padding_idx)
-
-        self.encoder = BartEncoder(config, self.shared)
-        self.decoder = BartDecoder(config, self.shared)
-
-        self.init_weights()
-
-    def get_input_embeddings(self):
-        return self.shared
-
-    def set_input_embeddings(self, value):
-        self.shared = value
-        self.encoder.embed_tokens = self.shared
-        self.decoder.embed_tokens = self.shared
-
-    def get_encoder(self):
-        return self.encoder
-
-    def get_decoder(self):
-        return self.decoder
-
-    def forward(
-        self,
-        input_ids=None,
-        attention_mask=None,
-        decoder_input_ids=None,
-        decoder_attention_mask=None,
-        head_mask=None,
-        decoder_head_mask=None,
-        cross_attn_head_mask=None,
-        encoder_outputs=None,
-        past_key_values=None,
-        inputs_embeds=None,
-        decoder_inputs_embeds=None,
-        use_cache=None,
-        output_attentions=None,
-        output_hidden_states=None,
-        return_dict=None,
-    ):
-
-        # different to other models, Bart automatically creates decoder_input_ids from
-        # input_ids if no decoder_input_ids are provided
-        if decoder_input_ids is None and decoder_inputs_embeds is None:
-            decoder_input_ids = shift_tokens_right(
-                input_ids, self.config.pad_token_id, self.config.decoder_start_token_id
-            )
-
-        output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
-        output_hidden_states = (
-            output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
-        )
-        use_cache = use_cache if use_cache is not None else self.config.use_cache
-        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
-
-        if encoder_outputs is None:
-            encoder_outputs = self.encoder(
-                input_ids=input_ids,
-                attention_mask=attention_mask,
-                head_mask=head_mask,
-                inputs_embeds=inputs_embeds,
-                output_attentions=output_attentions,
-                output_hidden_states=output_hidden_states,
-                return_dict=return_dict,
-            )
-        # If the user passed a tuple for encoder_outputs, we wrap it in a BaseModelOutput when return_dict=True
-        elif return_dict and not isinstance(encoder_outputs, BaseModelOutput):
-            encoder_outputs = BaseModelOutput(
-                last_hidden_state=encoder_outputs[0],
-                hidden_states=encoder_outputs[1] if len(encoder_outputs) > 1 else None,
-                attentions=encoder_outputs[2] if len(encoder_outputs) > 2 else None,
-            )
-
-        # decoder outputs consists of (dec_features, past_key_value, dec_hidden, dec_attn)
-        decoder_outputs = self.decoder(
-            input_ids=decoder_input_ids,
-            attention_mask=decoder_attention_mask,
-            encoder_hidden_states=encoder_outputs[0],
-            encoder_attention_mask=attention_mask,
-            head_mask=decoder_head_mask,
-            cross_attn_head_mask=cross_attn_head_mask,
-            past_key_values=past_key_values,
-            inputs_embeds=decoder_inputs_embeds,
-            use_cache=use_cache,
-            output_attentions=output_attentions,
-            output_hidden_states=output_hidden_states,
-            return_dict=return_dict,
-        )
-
-        if not return_dict:
-            return decoder_outputs + encoder_outputs
-
-        return Seq2SeqModelOutput(
-            last_hidden_state=decoder_outputs.last_hidden_state,
-            past_key_values=decoder_outputs.past_key_values,
-            decoder_hidden_states=decoder_outputs.hidden_states,
-            decoder_attentions=decoder_outputs.attentions,
-            cross_attentions=decoder_outputs.cross_attentions,
-            encoder_last_hidden_state=encoder_outputs.last_hidden_state,
-            encoder_hidden_states=encoder_outputs.hidden_states,
-            encoder_attentions=encoder_outputs.attentions,
-        )
-
-#
-# @add_start_docstrings(
-#     "The BART Model with a language modeling head. Can be used for summarization.", BART_START_DOCSTRING
-# )
-# class BartForConditionalGeneration(BartPretrainedModel):
-#     base_model_prefix = "model"
-#     _keys_to_ignore_on_load_missing = [r"final_logits_bias", r"lm_head\.weight"]
-#
-#     def __init__(self, config: BartConfig):
-#         super().__init__(config)
-#         self.model = BartModel(config)
-#         self.register_buffer("final_logits_bias", torch.zeros((1, self.model.shared.num_embeddings)))
-#         self.lm_head = nn.Linear(config.d_model, self.model.shared.num_embeddings, bias=False)
-#
-#         self.init_weights()
-#
-#     def get_encoder(self):
-#         return self.model.get_encoder()
-#
-#     def get_decoder(self):
-#         return self.model.get_decoder()
-#
-#     def resize_token_embeddings(self, new_num_tokens: int) -> nn.Embedding:
-#         new_embeddings = super().resize_token_embeddings(new_num_tokens)
-#         self._resize_final_logits_bias(new_num_tokens)
-#         return new_embeddings
-#
-#     def _resize_final_logits_bias(self, new_num_tokens: int) -> None:
-#         old_num_tokens = self.final_logits_bias.shape[-1]
-#         if new_num_tokens <= old_num_tokens:
-#             new_bias = self.final_logits_bias[:, :new_num_tokens]
-#         else:
-#             extra_bias = torch.zeros((1, new_num_tokens - old_num_tokens), device=self.final_logits_bias.device)
-#             new_bias = torch.cat([self.final_logits_bias, extra_bias], dim=1)
-#         self.register_buffer("final_logits_bias", new_bias)
-#
-#     def get_output_embeddings(self):
-#         return self.lm_head
-#
-#     def set_output_embeddings(self, new_embeddings):
-#         self.lm_head = new_embeddings
-#
-#     @add_start_docstrings_to_model_forward(BART_INPUTS_DOCSTRING)
-#     @replace_return_docstrings(output_type=Seq2SeqLMOutput, config_class=_CONFIG_FOR_DOC)
-#     @add_end_docstrings(BART_GENERATION_EXAMPLE)
-#     def forward(
-#         self,
-#         input_ids=None,
-#         attention_mask=None,
-#         decoder_input_ids=None,
-#         decoder_attention_mask=None,
-#         head_mask=None,
-#         decoder_head_mask=None,
-#         cross_attn_head_mask=None,
-#         encoder_outputs=None,
-#         past_key_values=None,
-#         inputs_embeds=None,
-#         decoder_inputs_embeds=None,
-#         labels=None,
-#         use_cache=None,
-#         output_attentions=None,
-#         output_hidden_states=None,
-#         return_dict=None,
-#     ):
-#         r"""
-#         labels (:obj:`torch.LongTensor` of shape :obj:`(batch_size, sequence_length)`, `optional`):
-#             Labels for computing the masked language modeling loss. Indices should either be in ``[0, ...,
-#             config.vocab_size]`` or -100 (see ``input_ids`` docstring). Tokens with indices set to ``-100`` are ignored
-#             (masked), the loss is only computed for the tokens with labels in ``[0, ..., config.vocab_size]``.
-#
-#         Returns:
-#         """
-#         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
-#
-#         if labels is not None:
-#             if decoder_input_ids is None and decoder_inputs_embeds is None:
-#                 decoder_input_ids = shift_tokens_right(
-#                     labels, self.config.pad_token_id, self.config.decoder_start_token_id
-#                 )
-#
-#         outputs = self.model(
-#             input_ids,
-#             attention_mask=attention_mask,
-#             decoder_input_ids=decoder_input_ids,
-#             encoder_outputs=encoder_outputs,
-#             decoder_attention_mask=decoder_attention_mask,
-#             head_mask=head_mask,
-#             decoder_head_mask=decoder_head_mask,
-#             cross_attn_head_mask=cross_attn_head_mask,
-#             past_key_values=past_key_values,
-#             inputs_embeds=inputs_embeds,
-#             decoder_inputs_embeds=decoder_inputs_embeds,
-#             use_cache=use_cache,
-#             output_attentions=output_attentions,
-#             output_hidden_states=output_hidden_states,
-#             return_dict=return_dict,
-#         )
-#         lm_logits = self.lm_head(outputs[0]) + self.final_logits_bias
-#
-#         masked_lm_loss = None
-#         if labels is not None:
-#             loss_fct = CrossEntropyLoss()
-#             masked_lm_loss = loss_fct(lm_logits.view(-1, self.config.vocab_size), labels.view(-1))
-#
-#         if not return_dict:
-#             output = (lm_logits,) + outputs[1:]
-#             return ((masked_lm_loss,) + output) if masked_lm_loss is not None else output
-#
-#         return Seq2SeqLMOutput(
-#             loss=masked_lm_loss,
-#             logits=lm_logits,
-#             past_key_values=outputs.past_key_values,
-#             decoder_hidden_states=outputs.decoder_hidden_states,
-#             decoder_attentions=outputs.decoder_attentions,
-#             cross_attentions=outputs.cross_attentions,
-#             encoder_last_hidden_state=outputs.encoder_last_hidden_state,
-#             encoder_hidden_states=outputs.encoder_hidden_states,
-#             encoder_attentions=outputs.encoder_attentions,
-#         )
-#
-#     def prepare_inputs_for_generation(
-#         self,
-#         decoder_input_ids,
-#         past=None,
-#         attention_mask=None,
-#         head_mask=None,
-#         decoder_head_mask=None,
-#         cross_attn_head_mask=None,
-#         use_cache=None,
-#         encoder_outputs=None,
-#         **kwargs
-#     ):
-#         # cut decoder_input_ids if past is used
-#         if past is not None:
-#             decoder_input_ids = decoder_input_ids[:, -1:]
-#
-#         return {
-#             "input_ids": None,  # encoder_outputs is defined. input_ids not needed
-#             "encoder_outputs": encoder_outputs,
-#             "past_key_values": past,
-#             "decoder_input_ids": decoder_input_ids,
-#             "attention_mask": attention_mask,
-#             "head_mask": head_mask,
-#             "decoder_head_mask": decoder_head_mask,
-#             "cross_attn_head_mask": cross_attn_head_mask,
-#             "use_cache": use_cache,  # change this to avoid caching (presumably for debugging)
-#         }
-#
-#     def prepare_decoder_input_ids_from_labels(self, labels: torch.Tensor):
-#         return shift_tokens_right(labels, self.config.pad_token_id, self.config.decoder_start_token_id)
-#
-#     @staticmethod
-#     def _reorder_cache(past, beam_idx):
-#         reordered_past = ()
-#         for layer_past in past:
-#             # cached cross_attention states don't have to be reordered -> they are always the same
-#             reordered_past += (
-#                 tuple(past_state.index_select(0, beam_idx) for past_state in layer_past[:2]) + layer_past[2:],
-#             )
-#         return reordered_past
-#
-#
-# @add_start_docstrings(
-#     """
-#     Bart model with a sequence classification/head on top (a linear layer on top of the pooled output) e.g. for GLUE
-#     tasks.
-#     """,
-#     BART_START_DOCSTRING,
-# )
-# class BartForSequenceClassification(BartPretrainedModel):
-#     def __init__(self, config: BartConfig, **kwargs):
-#         super().__init__(config, **kwargs)
-#         self.model = BartModel(config)
-#         self.classification_head = BartClassificationHead(
-#             config.d_model,
-#             config.d_model,
-#             config.num_labels,
-#             config.classifier_dropout,
-#         )
-#         self.model._init_weights(self.classification_head.dense)
-#         self.model._init_weights(self.classification_head.out_proj)
-#
-#     @add_start_docstrings_to_model_forward(BART_INPUTS_DOCSTRING)
-#     @add_code_sample_docstrings(
-#         tokenizer_class=_TOKENIZER_FOR_DOC,
-#         checkpoint=_CHECKPOINT_FOR_DOC,
-#         output_type=Seq2SeqSequenceClassifierOutput,
-#         config_class=_CONFIG_FOR_DOC,
-#     )
-#     def forward(
-#         self,
-#         input_ids=None,
-#         attention_mask=None,
-#         decoder_input_ids=None,
-#         decoder_attention_mask=None,
-#         head_mask=None,
-#         decoder_head_mask=None,
-#         cross_attn_head_mask=None,
-#         encoder_outputs=None,
-#         inputs_embeds=None,
-#         decoder_inputs_embeds=None,
-#         labels=None,
-#         use_cache=None,
-#         output_attentions=None,
-#         output_hidden_states=None,
-#         return_dict=None,
-#     ):
-#         r"""
-#         labels (:obj:`torch.LongTensor` of shape :obj:`(batch_size,)`, `optional`):
-#             Labels for computing the sequence classification/regression loss. Indices should be in :obj:`[0, ...,
-#             config.num_labels - 1]`. If :obj:`config.num_labels > 1` a classification loss is computed (Cross-Entropy).
-#         """
-#         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
-#         if labels is not None:
-#             use_cache = False
-#
-#         if input_ids is None and inputs_embeds is not None:
-#             raise NotImplementedError(
-#                 f"Passing input embeddings is currently not supported for {self.__class__.__name__}"
-#             )
-#
-#         outputs = self.model(
-#             input_ids,
-#             attention_mask=attention_mask,
-#             decoder_input_ids=decoder_input_ids,
-#             decoder_attention_mask=decoder_attention_mask,
-#             head_mask=head_mask,
-#             decoder_head_mask=decoder_head_mask,
-#             cross_attn_head_mask=cross_attn_head_mask,
-#             encoder_outputs=encoder_outputs,
-#             inputs_embeds=inputs_embeds,
-#             decoder_inputs_embeds=decoder_inputs_embeds,
-#             use_cache=use_cache,
-#             output_attentions=output_attentions,
-#             output_hidden_states=output_hidden_states,
-#             return_dict=return_dict,
-#         )
-#         hidden_states = outputs[0]  # last hidden state
-#
-#         eos_mask = input_ids.eq(self.config.eos_token_id)
-#
-#         if len(torch.unique_consecutive(eos_mask.sum(1))) > 1:
-#             raise ValueError("All examples must have the same number of <eos> tokens.")
-#         sentence_representation = hidden_states[eos_mask, :].view(hidden_states.size(0), -1, hidden_states.size(-1))[
-#             :, -1, :
-#         ]
-#         logits = self.classification_head(sentence_representation)
-#
-#         loss = None
-#         if labels is not None:
-#             if self.config.num_labels == 1:
-#                 # regression
-#                 loss_fct = MSELoss()
-#                 loss = loss_fct(logits.view(-1), labels.view(-1))
-#             else:
-#                 loss_fct = CrossEntropyLoss()
-#                 loss = loss_fct(logits.view(-1, self.config.num_labels), labels.view(-1))
-#
-#         if not return_dict:
-#             output = (logits,) + outputs[1:]
-#             return ((loss,) + output) if loss is not None else output
-#
-#         return Seq2SeqSequenceClassifierOutput(
-#             loss=loss,
-#             logits=logits,
-#             past_key_values=outputs.past_key_values,
-#             decoder_hidden_states=outputs.decoder_hidden_states,
-#             decoder_attentions=outputs.decoder_attentions,
-#             cross_attentions=outputs.cross_attentions,
-#             encoder_last_hidden_state=outputs.encoder_last_hidden_state,
-#             encoder_hidden_states=outputs.encoder_hidden_states,
-#             encoder_attentions=outputs.encoder_attentions,
-#         )
-#
-#
-# @add_start_docstrings(
-#     """
-#     BART Model with a span classification head on top for extractive question-answering tasks like SQuAD (a linear
-#     layer on top of the hidden-states output to compute `span start logits` and `span end logits`).
-#     """,
-#     BART_START_DOCSTRING,
-# )
-# class BartForQuestionAnswering(BartPretrainedModel):
-#     def __init__(self, config):
-#         super().__init__(config)
-#
-#         config.num_labels = 2
-#         self.num_labels = config.num_labels
-#
-#         self.model = BartModel(config)
-#         self.qa_outputs = nn.Linear(config.hidden_size, config.num_labels)
-#
-#         self.model._init_weights(self.qa_outputs)
-#
-#     @add_start_docstrings_to_model_forward(BART_INPUTS_DOCSTRING)
-#     @add_code_sample_docstrings(
-#         tokenizer_class=_TOKENIZER_FOR_DOC,
-#         checkpoint=_CHECKPOINT_FOR_DOC,
-#         output_type=Seq2SeqQuestionAnsweringModelOutput,
-#         config_class=_CONFIG_FOR_DOC,
-#     )
-#     def forward(
-#         self,
-#         input_ids=None,
-#         attention_mask=None,
-#         decoder_input_ids=None,
-#         decoder_attention_mask=None,
-#         head_mask=None,
-#         decoder_head_mask=None,
-#         cross_attn_head_mask=None,
-#         encoder_outputs=None,
-#         start_positions=None,
-#         end_positions=None,
-#         inputs_embeds=None,
-#         decoder_inputs_embeds=None,
-#         use_cache=None,
-#         output_attentions=None,
-#         output_hidden_states=None,
-#         return_dict=None,
-#     ):
-#         r"""
-#         start_positions (:obj:`torch.LongTensor` of shape :obj:`(batch_size,)`, `optional`):
-#             Labels for position (index) of the start of the labelled span for computing the token classification loss.
-#             Positions are clamped to the length of the sequence (`sequence_length`). Position outside of the sequence
-#             are not taken into account for computing the loss.
-#         end_positions (:obj:`torch.LongTensor` of shape :obj:`(batch_size,)`, `optional`):
-#             Labels for position (index) of the end of the labelled span for computing the token classification loss.
-#             Positions are clamped to the length of the sequence (`sequence_length`). Position outside of the sequence
-#             are not taken into account for computing the loss.
-#         """
-#         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
-#         if start_positions is not None and end_positions is not None:
-#             use_cache = False
-#
-#         outputs = self.model(
-#             input_ids,
-#             attention_mask=attention_mask,
-#             decoder_input_ids=decoder_input_ids,
-#             decoder_attention_mask=decoder_attention_mask,
-#             head_mask=head_mask,
-#             decoder_head_mask=decoder_head_mask,
-#             cross_attn_head_mask=cross_attn_head_mask,
-#             encoder_outputs=encoder_outputs,
-#             inputs_embeds=inputs_embeds,
-#             decoder_inputs_embeds=decoder_inputs_embeds,
-#             use_cache=use_cache,
-#             output_attentions=output_attentions,
-#             output_hidden_states=output_hidden_states,
-#             return_dict=return_dict,
-#         )
-#
-#         sequence_output = outputs[0]
-#
-#         logits = self.qa_outputs(sequence_output)
-#         start_logits, end_logits = logits.split(1, dim=-1)
-#         start_logits = start_logits.squeeze(-1).contiguous()
-#         end_logits = end_logits.squeeze(-1).contiguous()
-#
-#         total_loss = None
-#         if start_positions is not None and end_positions is not None:
-#             # If we are on multi-GPU, split add a dimension
-#             if len(start_positions.size()) > 1:
-#                 start_positions = start_positions.squeeze(-1)
-#             if len(end_positions.size()) > 1:
-#                 end_positions = end_positions.squeeze(-1)
-#             # sometimes the start/end positions are outside our model inputs, we ignore these terms
-#             ignored_index = start_logits.size(1)
-#             start_positions = start_positions.clamp(0, ignored_index)
-#             end_positions = end_positions.clamp(0, ignored_index)
-#
-#             loss_fct = CrossEntropyLoss(ignore_index=ignored_index)
-#             start_loss = loss_fct(start_logits, start_positions)
-#             end_loss = loss_fct(end_logits, end_positions)
-#             total_loss = (start_loss + end_loss) / 2
-#
-#         if not return_dict:
-#             output = (
-#                 start_logits,
-#                 end_logits,
-#             ) + outputs[1:]
-#             return ((total_loss,) + output) if total_loss is not None else output
-#
-#         return Seq2SeqQuestionAnsweringModelOutput(
-#             loss=total_loss,
-#             start_logits=start_logits,
-#             end_logits=end_logits,
-#             past_key_values=outputs.past_key_values,
-#             decoder_hidden_states=outputs.decoder_hidden_states,
-#             decoder_attentions=outputs.decoder_attentions,
-#             cross_attentions=outputs.cross_attentions,
-#             encoder_last_hidden_state=outputs.encoder_last_hidden_state,
-#             encoder_hidden_states=outputs.encoder_hidden_states,
-#             encoder_attentions=outputs.encoder_attentions,
-#         )
-#
-#
-# class BartDecoderWrapper(BartPretrainedModel):
-#     """
-#     This wrapper class is a helper class to correctly load pretrained checkpoints when the causal language model is
-#     used in combination with the :class:`~transformers.EncoderDecoderModel` framework.
-#     """
-#
-#     def __init__(self, config):
-#         super().__init__(config)
-#         self.decoder = BartDecoder(config)
-#
-#     def forward(self, *args, **kwargs):
-#         return self.decoder(*args, **kwargs)
-#
-#
-# class BartForCausalLM(BartPretrainedModel):
-#     def __init__(self, config):
-#         super().__init__(config)
-#         config = copy.deepcopy(config)
-#         config.is_decoder = True
-#         config.is_encoder_decoder = False
-#         self.model = BartDecoderWrapper(config)
-#
-#         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
-#
-#         self.init_weights()
-#
-#     def get_input_embeddings(self):
-#         return self.model.decoder.embed_tokens
-#
-#     def set_input_embeddings(self, value):
-#         self.model.decoder.embed_tokens = value
-#
-#     def get_output_embeddings(self):
-#         return self.lm_head
-#
-#     def set_output_embeddings(self, new_embeddings):
-#         self.lm_head = new_embeddings
-#
-#     def set_decoder(self, decoder):
-#         self.model.decoder = decoder
-#
-#     def get_decoder(self):
-#         return self.model.decoder
-#
-#     @replace_return_docstrings(output_type=CausalLMOutputWithCrossAttentions, config_class=_CONFIG_FOR_DOC)
-#     def forward(
-#         self,
-#         input_ids=None,
-#         attention_mask=None,
-#         encoder_hidden_states=None,
-#         encoder_attention_mask=None,
-#         head_mask=None,
-#         cross_attn_head_mask=None,
-#         past_key_values=None,
-#         inputs_embeds=None,
-#         labels=None,
-#         use_cache=None,
-#         output_attentions=None,
-#         output_hidden_states=None,
-#         return_dict=None,
-#     ):
-#         r"""
-#         Args:
-#             input_ids (:obj:`torch.LongTensor` of shape :obj:`(batch_size, sequence_length)`):
-#                 Indices of input sequence tokens in the vocabulary. Padding will be ignored by default should you
-#                 provide it.
-#
-#                 Indices can be obtained using :class:`~transformers.BartTokenizer`. See
-#                 :meth:`transformers.PreTrainedTokenizer.encode` and :meth:`transformers.PreTrainedTokenizer.__call__`
-#                 for details.
-#
-#                 `What are input IDs? <../glossary.html#input-ids>`__
-#             attention_mask (:obj:`torch.Tensor` of shape :obj:`(batch_size, sequence_length)`, `optional`):
-#                 Mask to avoid performing attention on padding token indices. Mask values selected in ``[0, 1]``:
-#
-#                 - 1 for tokens that are **not masked**,
-#                 - 0 for tokens that are **masked**.
-#
-#                 `What are attention masks? <../glossary.html#attention-mask>`__
-#             encoder_hidden_states  (:obj:`torch.FloatTensor` of shape :obj:`(batch_size, sequence_length, hidden_size)`, `optional`):
-#                 Sequence of hidden-states at the output of the last layer of the encoder. Used in the cross-attention
-#                 if the model is configured as a decoder.
-#             encoder_attention_mask (:obj:`torch.FloatTensor` of shape :obj:`(batch_size, sequence_length)`, `optional`):
-#                 Mask to avoid performing attention on the padding token indices of the encoder input. This mask is used
-#                 in the cross-attention if the model is configured as a decoder. Mask values selected in ``[0, 1]``:
-#             head_mask (:obj:`torch.Tensor` of shape :obj:`(decoder_layers, decoder_attention_heads)`, `optional`):
-#                 Mask to nullify selected heads of the attention modules. Mask values selected in ``[0, 1]``:
-#
-#                 - 1 indicates the head is **not masked**,
-#                 - 0 indicates the head is **masked**.
-#
-#             cross_attn_head_mask (:obj:`torch.Tensor` of shape :obj:`(decoder_layers, decoder_attention_heads)`, `optional`):
-#                 Mask to nullify selected heads of the cross-attention modules. Mask values selected in ``[0, 1]``:
-#
-#                 - 1 indicates the head is **not masked**,
-#                 - 0 indicates the head is **masked**.
-#
-#             past_key_values (:obj:`tuple(tuple(torch.FloatTensor))`, `optional`, returned when ``use_cache=True`` is passed or when ``config.use_cache=True``):
-#                 Tuple of :obj:`tuple(torch.FloatTensor)` of length :obj:`config.n_layers`, with each tuple having 2
-#                 tensors of shape :obj:`(batch_size, num_heads, sequence_length, embed_size_per_head)`) and 2 additional
-#                 tensors of shape :obj:`(batch_size, num_heads, encoder_sequence_length, embed_size_per_head)`. The two
-#                 additional tensors are only required when the model is used as a decoder in a Sequence to Sequence
-#                 model.
-#
-#                 Contains pre-computed hidden-states (key and values in the self-attention blocks and in the
-#                 cross-attention blocks) that can be used (see :obj:`past_key_values` input) to speed up sequential
-#                 decoding.
-#
-#                 If :obj:`past_key_values` are used, the user can optionally input only the last ``decoder_input_ids``
-#                 (those that don't have their past key value states given to this model) of shape :obj:`(batch_size, 1)`
-#                 instead of all ``decoder_input_ids`` of shape :obj:`(batch_size, sequence_length)`.
-#             labels (:obj:`torch.LongTensor` of shape :obj:`(batch_size, sequence_length)`, `optional`):
-#                 Labels for computing the masked language modeling loss. Indices should either be in ``[0, ...,
-#                 config.vocab_size]`` or -100 (see ``input_ids`` docstring). Tokens with indices set to ``-100`` are
-#                 ignored (masked), the loss is only computed for the tokens with labels in ``[0, ...,
-#                 config.vocab_size]``.
-#             use_cache (:obj:`bool`, `optional`):
-#                 If set to :obj:`True`, :obj:`past_key_values` key value states are returned and can be used to speed up
-#                 decoding (see :obj:`past_key_values`).
-#
-#                 - 1 for tokens that are **not masked**,
-#                 - 0 for tokens that are **masked**.
-#             output_attentions (:obj:`bool`, `optional`):
-#                 Whether or not to return the attentions tensors of all attention layers. See ``attentions`` under
-#                 returned tensors for more detail.
-#             output_hidden_states (:obj:`bool`, `optional`):
-#                 Whether or not to return the hidden states of all layers. See ``hidden_states`` under returned tensors
-#                 for more detail.
-#             return_dict (:obj:`bool`, `optional`):
-#                 Whether or not to return a :class:`~transformers.file_utils.ModelOutput` instead of a plain tuple.
-#
-#         Returns:
-#
-#         Example::
-#
-#             >>> from transformers import BartTokenizer, BartForCausalLM
-#
-#             >>> tokenizer = BartTokenizer.from_pretrained('facebook/bart-large')
-#             >>> model = BartForCausalLM.from_pretrained('facebook/bart-large', add_cross_attention=False)
-#             >>> assert model.config.is_decoder, f"{model.__class__} has to be configured as a decoder."
-#             >>> inputs = tokenizer("Hello, my dog is cute", return_tensors="pt")
-#             >>> outputs = model(**inputs)
-#
-#             >>> last_hidden_states = outputs.last_hidden_state
-#         """
-#
-#         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
-#         output_hidden_states = (
-#             output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
-#         )
-#         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
-#
-#         # decoder outputs consists of (dec_features, layer_state, dec_hidden, dec_attn)
-#         outputs = self.model.decoder(
-#             input_ids=input_ids,
-#             attention_mask=attention_mask,
-#             encoder_hidden_states=encoder_hidden_states,
-#             encoder_attention_mask=encoder_attention_mask,
-#             head_mask=head_mask,
-#             cross_attn_head_mask=cross_attn_head_mask,
-#             past_key_values=past_key_values,
-#             inputs_embeds=inputs_embeds,
-#             use_cache=use_cache,
-#             output_attentions=output_attentions,
-#             output_hidden_states=output_hidden_states,
-#             return_dict=return_dict,
-#         )
-#
-#         logits = self.lm_head(outputs[0])
-#
-#         loss = None
-#         if labels is not None:
-#             loss_fct = CrossEntropyLoss()
-#             loss = loss_fct(logits.view(-1, self.config.vocab_size), labels.view(-1))
-#
-#         if not return_dict:
-#             output = (logits,) + outputs[1:]
-#             return (loss,) + output if loss is not None else output
-#
-#         return CausalLMOutputWithCrossAttentions(
-#             loss=loss,
-#             logits=logits,
-#             past_key_values=outputs.past_key_values,
-#             hidden_states=outputs.hidden_states,
-#             attentions=outputs.attentions,
-#             cross_attentions=outputs.cross_attentions,
-#         )
-#
-#     def prepare_inputs_for_generation(self, input_ids, past=None, attention_mask=None, use_cache=None, **kwargs):
-#         # if model is used as a decoder in encoder-decoder model, the decoder attention mask is created on the fly
-#         if attention_mask is None:
-#             attention_mask = input_ids.new_ones(input_ids.shape)
-#
-#         if past:
-#             input_ids = input_ids[:, -1:]
-#         # first step, decoder_cached_states are empty
-#         return {
-#             "input_ids": input_ids,  # encoder_outputs is defined. input_ids not needed
-#             "attention_mask": attention_mask,
-#             "past_key_values": past,
-#             "use_cache": use_cache,
-#         }
-#
-#     @staticmethod
-#     def _reorder_cache(past, beam_idx):
-#         reordered_past = ()
-#         for layer_past in past:
-#             reordered_past += (tuple(past_state.index_select(0, beam_idx) for past_state in layer_past),)
-#         return reordered_past

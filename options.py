@@ -41,6 +41,11 @@ def make_parser(parser):
     parser.add_argument('-dark_experience_replay', action='store_true',
                         help='Store the model logits at the time for more detailed experience replay. '
                              'This is equivalent to distilling between the old and the new model')
+    parser.add_argument('-dr_alpha', type=float, default=0.0,
+                        help='Coefficient for DER')
+    parser.add_argument('-dr_beta', type=float, default=0.0,
+                        help='Second Coefficient for DER')
+
 
     parser.add_argument('-dataset_index', type=int, default=0,
                         help='Index of the dataset used in OFFLINE continual learning')
@@ -650,6 +655,9 @@ def make_parser(parser):
 
 def backward_compatible(opt):
     # FOR BACKWARD COMPATIBILITY
+    if not hasattr(opt, 'dark_experience_replay'):
+        opt.dark_experience_replay = 0
+
     if not hasattr(opt, 'transducer_loss'):
         opt.transducer_loss = 0
 

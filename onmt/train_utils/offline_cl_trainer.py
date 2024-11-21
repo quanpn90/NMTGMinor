@@ -642,7 +642,11 @@ class OfflineCLTrainer(object):
         os.makedirs(save_dir, exist_ok=True)
 
         if final:
-            file_name = '%s.final.pt' % prefix
+
+            if self.opt.dark_experience_replay:
+                file_name = '%s.der.final.pt' % prefix
+            else:
+                file_name = '%s.final.pt' % prefix
         else:
             file_name = '%s_ppl_%.6f_e%.2f.pt' % (prefix, valid_ppl, epoch)
         file_name = os.path.join(save_dir, file_name)
@@ -2450,7 +2454,7 @@ class OfflineCLTrainer(object):
                                                                force_shuffle=True)
 
             self.print("[INFO] Updating the Lambdas for Dual Primal with %d rehearsal batches ...." % total, flush=True)
-
+            c = 0
             for memory_batch in memory_batches:
                 with torch.no_grad():
                     rehearsed_dataset_ids, rehearsed_indices = memory_batch[0], memory_batch[1]
@@ -2490,7 +2494,113 @@ class OfflineCLTrainer(object):
                     logit = logit[:l]
 
                     # should we .cpu() at this point?
-                    trimmed_logits.append(logit)ren
+                    trimmed_logits.append(logit)
+
+                    assert logit.size(0) == l, "The length of logit must be %d, but got %d" % (l, logit.size(0))
+
+                self.reservoir.import_logits(reservoir_ids, trimmed_logits)
+
+                if c == 0 or ((c + 1) % total < 1):
+                    log_string = ("Dataset %d, %5d/%5d;" %
+                                  (dataset_id, c + 1, total))
+
+                    self.print(log_string, flush=True)
+                c = c + 1
+
+            self.print("[INFO] Done! Now checking if all reservoir have the same logits")
+            # TODO: check that all samples in the data have the logits available
+
+        # TODO: only update the logits if the loss is lower? which means that we update the "dark experience" on the way
+    def populate_reservoir_fast(self, train_data=None, dataset_id=None):
+
+        opt = self.opt
+        assert dataset_id is not None
+        assert train_data is not None
+
+        if self.reservoir is None:
+            self.print("[INFO] Skipping the Populating step because reservoir is unused ...", flush=True)
+            return
+
+        self.print("[INFO] Populating the reservoir after training ...", flush=True)
+
+        # this function is called at the end of training
+        _dataset = train_data[dataset_id]
+
+        data_size = _dataset.size()
+        log_interval = 1000
+
+        for i in range(data_size):
+
+            sample_id = i
+            # already know the dataset_id
+            src_length, tgt_length = _dataset.get_length(sample_id)
+
+            # removing the bottleneck of generating the actual data samples
+            sample = (dataset_id, sample_id, src_length, tgt_length)
+            self.reservoir.add_sample_single(sample)
+
+            if i == 0 or ((i + 1) % log_interval < 1):
+                log_string = ("Dataset %d, %5d/%5d;" %
+                              (dataset_id, i + 1, data_size))
+
+                self.print(log_string, flush=True)
+
+        self.print("[INFO] Done.")
+        self.print(self.reservoir.get_stats())
+
+        if opt.dark_experience_replay:
+
+            self.print("[INFO] Generating logits for dark experience replay")
+            memory_batches, total = self.reservoir.get_samples(worker=self.rank,
+                                                               num_workers=self.world_size,
+                                                               force_shuffle=True)
+
+            for memory_batch in memory_batches:
+                with torch.no_grad():
+                    rehearsed_dataset_ids, rehearsed_indices = memory_batch[0], memory_batch[1]
+                    reservoir_ids = memory_batch[3]
+
+                    samples = get_batch_from_multidataset(train_data, rehearsed_dataset_ids,
+                                                          rehearsed_indices)
+
+                    batch = prepare_sample(samples, device=self.device)
+                    targets = batch.get('target_output')
+                    tgt_mask = targets.ne(onmt.constants.PAD)
+
+                    with autocast(enabled=opt.fp16,
+                                  dtype=torch.bfloat16 if self.bf16_ready else torch.float16):
+                        outputs = self.model(batch, streaming=False, target_mask=tgt_mask,
+                                             ctc_loss_function=self.ctc_loss_function,
+                                             ctc_labels=targets,
+                                             ctc_coeff=opt.ctc_loss if self.optim._step > opt.ctc_loss_delay else 0.0,
+                                             transducer_loss_function=self.transducer_loss_function,
+                                             transducer_coeff=opt.transducer_loss
+                                             )
+
+                logits = outputs['logits']
+
+                pad_mask = targets.eq(self.loss_function.padding_idx).unsqueeze(2)
+
+                assert(pad_mask.size(0) == logits.size(0))
+                assert(logits.size(1) == pad_mask.size(1))
+                lengths = (1 - pad_mask.squeeze(2).long()).sum(dim=0).tolist()
+
+                logits.masked_fill_(pad_mask, 0)
+
+                seq_len, bsz = logits.size(0), logits.size(1)
+                trimmed_logits = list()
+
+                for i, l in enumerate(lengths):
+                    # logit is a sequence [T x V]
+                    logit = logits[:, i, :]
+                    assert logit.size(0) == seq_len
+
+                    logit = logit[:l]
+
+                    # should we .cpu() at this point?
+                    trimmed_logits.append(logit)
+
+                    assert logit.size(0) == l, "The length of logit must be %d, but got %d" % (l, logit.size(0))
 
                 self.reservoir.import_logits(reservoir_ids, trimmed_logits)
 
@@ -2498,6 +2608,7 @@ class OfflineCLTrainer(object):
             # TODO: check that all samples in the data have the logits available
 
         # TODO: only update the logits if the loss is lower? which means that we update the "dark experience" on the way
+
 
     def estimate_max_epoch(self, train_data=None, dataset_id=None):
 
@@ -3300,7 +3411,7 @@ class OfflineCLTrainer(object):
         if opt.finalize_only:
 
             self.average_checkpoints()
-            self.populate_reservoir(train_data, dataset_id)
+            self.populate_reservoir_fast(train_data, dataset_id)
 
             # evaluate the last time
             valid_loss, valid_accuracy = self.eval(valid_data, dataset_id)
