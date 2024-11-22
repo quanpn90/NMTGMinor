@@ -286,6 +286,9 @@ def build_tm_model(opt, dicts, constants=None, verbose=True):
 
                 decoder = BartDecoder(dec_bart_config, opt)
 
+                if opt.freeze_embedding:
+                    decoder.embed_tokens.weight.requires_grad = False
+
             if opt.dec_state_dict is not None and len(opt.dec_state_dict) > 1:
                 print_v("[INFO] Loading weights for decoder from: %s ..." % opt.dec_state_dict)
                 dec_model_state_dict = torch.load(opt.dec_state_dict, map_location="cpu")
@@ -926,6 +929,10 @@ def optimize_model(model, fp16=True, distributed=False):
             elif classname.find('MBartAttention') != -1:
                 m_.convert_fast_attention()
             elif classname.find('MBartCrossAttention') != -1:
+                m_.convert_fast_attention()
+            elif classname.find('BartAttention') != -1:
+                m_.convert_fast_attention()
+            elif classname.find('BartCrossAttention') != -1:
                 m_.convert_fast_attention()
 
         m.apply(convert)

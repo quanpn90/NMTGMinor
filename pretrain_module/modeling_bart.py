@@ -27,6 +27,11 @@ from torch.nn import Parameter
 from torch.cuda.amp import autocast
 
 from onmt.modules.optimized.linear import linear_function, factorize_linear
+from onmt.modules.optimized.self_attention_func import self_attn_func, self_attn_compact_func
+from onmt.modules.optimized.encdec_attention_func_bias import encdec_attn_bias_func, encdec_attn_bias_compact_func
+
+from onmt.models.speech_recognizer.fairseq_wav2vec2.fairseq_modules import index_copy
+from torch.cuda.amp import custom_fwd, custom_bwd
 
 from .activations import ACT2FN
 # from ...file_utils import (
@@ -277,92 +282,22 @@ class BartAttention(nn.Module):
             out_proj_weight = self.out_proj.weight
             rm_i, sm_i, rm_o, sm_o = None, None, None, None
 
-            if self.is_factorized and self.flex_factorize:
+            if hidden_states.ndim == 3:
 
-                n_languages, _rank = self.rm_o.size(0), self.rm_o.size(1)
+                use_time_mask = self.is_decoder
+                qlen, klen = hidden_states.size(0), hidden_states.size(0)
+                mask = attention_mask
+                low_precision = True  # Use CUDA impl
 
-                if lang.ndim == 1:
+                attn_output, coverage = self_attn_func(use_time_mask, self.training, self.num_heads, hidden_states,
+                                                       in_proj_weight, out_proj_weight,
+                                                       self.proj_bias, self.out_proj.bias,
+                                                       mask, self.dropout,
+                                                       False, None,
+                                                       incremental, incremental_cache, low_precision,
+                                                       True, checkpointing)
 
-                    rm_i = torch.index_select(self.rm_i, 0, lang).squeeze(0)  # squeeze possible because only 1
-                    sm_i = torch.index_select(self.sm_i, 0, lang).squeeze(0)
-                    rm_o = torch.index_select(self.rm_o, 0, lang).squeeze(0)
-                    sm_o = torch.index_select(self.sm_o, 0, lang).squeeze(0)
-
-                elif lang.ndim == 2:  # for flash attention with nested tensor
-                    rm_i = torch.mm(lang, self.rm_i.view(n_languages, _rank * self.rm_i.size(-1))).view(
-                        lang.size(0), _rank,
-                        self.rm_i.size(-1))
-                    sm_i = torch.mm(lang, self.sm_i.view(n_languages, _rank * self.sm_i.size(-1))).view(
-                        lang.size(0), _rank,
-                        self.sm_i.size(-1))
-                    rm_o = torch.mm(lang, self.rm_o.view(n_languages, _rank * self.rm_o.size(-1))).view(
-                        lang.size(0), _rank,
-                        self.rm_o.size(-1))
-                    sm_o = torch.mm(lang, self.sm_o.view(n_languages, _rank * self.sm_o.size(-1))).view(
-                        lang.size(0), _rank,
-                        self.sm_o.size(-1))
-
-                elif lang.ndim == 3:
-                    _len, _bsz = lang.size(0), lang.size(1)
-                    _lang = lang.view(_len * _bsz, lang.size(-1))
-                    rm_i = torch.mm(_lang, self.rm_i.view(n_languages, _rank * self.rm_i.size(-1))).view(
-                        _len, _bsz, _rank, self.rm_i.size(-1))
-                    sm_i = torch.mm(_lang, self.sm_i.view(n_languages, _rank * self.sm_i.size(-1))).view(
-                        _len, _bsz, _rank, self.sm_i.size(-1))
-                    rm_o = torch.mm(_lang, self.rm_o.view(n_languages, _rank * self.rm_o.size(-1))).view(
-                        _len, _bsz, _rank, self.rm_o.size(-1))
-                    sm_o = torch.mm(_lang, self.sm_o.view(n_languages, _rank * self.sm_o.size(-1))).view(
-                        _len, _bsz, _rank, self.sm_o.size(-1))
-
-                if hidden_states.ndim == 3:
-                    use_time_mask = self.is_decoder
-                    bsz, qlen = hidden_states.size(1), hidden_states.size(0)
-                    mask = attention_mask
-                    low_precision = True  # Use CUDA impl
-
-                    input_lin_results = factorize_linear(hidden_states, in_proj_weight, self.proj_bias, rm_i, sm_i)
-
-                    attn_output, coverage = self_attn_compact_func(use_time_mask, self.training, self.num_heads,
-                                                                   input_lin_results,
-                                                                   mask, self.dropout,
-                                                                   False, None,
-                                                                   incremental, incremental_cache, low_precision,
-                                                                   True, checkpointing)
-
-                    attn_output = attn_output.view(qlen, bsz, -1).contiguous()
-
-                    output = factorize_linear(attn_output, out_proj_weight, self.out_proj.bias, rm_o, sm_o)
-
-                    return output, coverage, incremental_cache
-
-                else:
-                    """
-                    flash attention
-                    """
-                    assert self.fast_bert_mha is not None
-                    assert cu_seqlens is not None
-                    assert max_len is not None
-
-                    total_bsz = hidden_states.size(0)
-                    # qkv = linear_function(hidden_states, in_proj_weight, self.proj_bias)  # B x H
-                    qkv = factorize_linear(hidden_states, in_proj_weight, self.proj_bias, rm_i, sm_i)
-                    # B x 3 x H x d
-
-                    # TODO: moving to CUDA to remove overhead?
-                    qkv = qkv.view(total_bsz, self.num_heads, 3, self.head_dim).transpose(1, 2).contiguous()
-
-                    dropout_p = self.dropout if self.training else 0.0
-                    causal = self.is_decoder
-                    softmax_scale = 1.0 / math.sqrt(64)
-                    context = self.fast_bert_mha(qkv, cu_seqlens, max_len, dropout_p, softmax_scale, causal, False)
-                    coverage = None
-
-                    context = context.view(-1, self.num_heads * self.head_dim).contiguous()
-                    output = factorize_linear(context, out_proj_weight, self.out_proj.bias, rm_o, sm_o)
-
-                    return output, coverage, incremental_cache
-
-            # Code is twice as long TODO: merging two sections
+                attn_output = attn_output
 
             else:
                 """
@@ -976,7 +911,7 @@ class BartDecoderLayer(nn.Module):
         if output_attentions:
             outputs += (self_attn_weights, cross_attn_weights)
 
-        return outputs
+        return outputs, incremental_cache
 
 
 
@@ -1378,6 +1313,9 @@ class BartDecoder(BartPretrainedModel):
         self.switchout = 0.0
         self.config.bert_hidden_size = config.d_model
 
+        from onmt.modules.optimized.flash_mha import flash_bert_mha
+        self.fast_bert_mha = flash_bert_mha
+
     @property
     def word_lut(self):
         return self.embed_tokens
@@ -1412,9 +1350,6 @@ class BartDecoder(BartPretrainedModel):
         attention_mask=None,
         encoder_hidden_states=None,
         encoder_attention_mask=None,
-        head_mask=None,
-        cross_attn_head_mask=None,
-        past_key_values=None,
         inputs_embeds=None,
         output_attentions=None,
         output_hidden_states=None,
@@ -1504,8 +1439,7 @@ class BartDecoder(BartPretrainedModel):
         else:
             raise ValueError("You have to specify either decoder_input_ids or decoder_inputs_embeds")
 
-        # past_key_values_length
-        past_key_values_length = past_key_values[0][0].shape[2] if past_key_values is not None else 0
+        past_key_values_length = 0
 
         if inputs_embeds is None:
             inputs_embeds = self.embed_tokens(input_ids) * self.embed_scale
@@ -1518,11 +1452,6 @@ class BartDecoder(BartPretrainedModel):
         padding_mask = attention_mask
         attention_mask = torch.triu(
             inputs_embeds.new_ones(qlen, klen), diagonal=1).bool()
-
-        # expand encoder attention mask
-        if encoder_hidden_states is not None and encoder_attention_mask is not None:
-            # [bsz, seq_len] -> [bsz, 1, tgt_seq_len, src_seq_len]
-            encoder_attention_mask = _expand_mask(encoder_attention_mask, inputs_embeds.dtype, tgt_len=input_shape[-1])
 
         # embed positions
         positions = self.embed_positions(input_shape, past_key_values_length)
@@ -1588,11 +1517,9 @@ class BartDecoder(BartPretrainedModel):
             if output_hidden_states:
                 all_hidden_states += (hidden_states,)
 
-            # Stochastic Layer (only applicable when not predicting language or idx > 0)
-            if not (self.predict_language > 0 and idx == 0):
-                dropout_probability = random.uniform(0, 1)
-                if self.training and (dropout_probability < self.layerdrop):
-                    continue
+            dropout_probability = random.uniform(0, 1)
+            if self.training and (dropout_probability < self.layerdrop):
+                continue
 
             layer_outputs, _ = decoder_layer(
                 hidden_states,
@@ -1617,7 +1544,7 @@ class BartDecoder(BartPretrainedModel):
 
         return tuple(
             v
-            for v in [hidden_states, next_cache, all_hidden_states, all_self_attns, all_cross_attentions]
+            for v in [hidden_states, all_hidden_states, all_self_attns, all_cross_attentions]
             if v is not None
         )
 
@@ -1658,6 +1585,7 @@ class BartDecoder(BartPretrainedModel):
             attention_mask = attention_mask[-1:, :]
 
         encoder_attention_mask = decoder_state.src_mask
+
         if not self.layers[0].encoder_attn.fast_attention:
             raise NotImplementedError
         else:

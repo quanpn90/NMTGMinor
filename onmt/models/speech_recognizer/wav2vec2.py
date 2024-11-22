@@ -1067,24 +1067,24 @@ class Wav2vecBERT(Wav2vecTransformer):
             output = decoder_output.transpose(0, 1)  # [bsz, tgt_len, d] => [tgt_len, bsz, d]
             output_dict = defaultdict(lambda: None)
             context = context.transpose(0, 1)  # to [src_l, b, de_model]
-        elif hasattr(self.decoder, 'dec_pretrained_model') and self.decoder.dec_pretrained_model in ["bart"]:
-            tgt_token_type = tgt.ne(onmt.constants.TGT_PAD).long()  # [bsz, len]
-            tgt_attention_mask = tgt.new(*tgt.size()).fill_(1)  # [bsz, len]
-
-            # the wav2vec returned mask is 1 for masked and 0 for un-masked, which is opposite to huggingface
-            src_attention_mask = 1 - (src_attention_mask.long())
-
-            decoder_output = self.decoder(input_ids=tgt,
-                                          attention_mask=tgt_attention_mask,
-                                          encoder_hidden_states=context,
-                                          encoder_attention_mask=src_attention_mask)
-            decoder_output = decoder_output[0]
-            output = decoder_output.transpose(0, 1)  # [bsz, tgt_len, d] => [tgt_len, bsz, d]
-            context = context.transpose(0, 1)
-            output_dict = defaultdict(lambda: None)
+        # elif hasattr(self.decoder, 'dec_pretrained_model') and self.decoder.dec_pretrained_model in ["bart"]:
+        #     tgt_token_type = tgt.ne(onmt.constants.TGT_PAD).long()  # [bsz, len]
+        #     tgt_attention_mask = tgt.new(*tgt.size()).fill_(1)  # [bsz, len]
+        #
+        #     # the wav2vec returned mask is 1 for masked and 0 for un-masked, which is opposite to huggingface
+        #     src_attention_mask = 1 - (src_attention_mask.long())
+        #
+        #     decoder_output = self.decoder(input_ids=tgt,
+        #                                   attention_mask=tgt_attention_mask,
+        #                                   encoder_hidden_states=context,
+        #                                   encoder_attention_mask=src_attention_mask)
+        #     decoder_output = decoder_output[0]
+        #     output = decoder_output.transpose(0, 1)  # [bsz, tgt_len, d] => [tgt_len, bsz, d]
+        #     context = context.transpose(0, 1)
+        #     output_dict = defaultdict(lambda: None)
 
         elif hasattr(self.decoder, 'dec_pretrained_model') and self.decoder.dec_pretrained_model \
-                in ["deltalm", "mbart", "mbart50"]:  # TODO: NLLB
+                in ["deltalm", "mbart", "mbart50", "bart"]:
 
             src_attention_mask = src_attention_mask  # new version
             # tgt_attention_mask = tgt.ne(onmt.constants.TGT_PAD).long()  # [bsz, len]
