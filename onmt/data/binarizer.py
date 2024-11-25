@@ -18,53 +18,33 @@ import torchaudio
 
 class SpeechBinarizer:
 
-    def __init__(self):
-        pass
-
-    @staticmethod
-    def binarize_h5_file(filename, output_format='raw',
-                         prev_context=0, concat=4, stride=1, fp16=False):
-
-        file_idx = -1;
-        if filename[-2:] == "h5":
-            srcf = h5.File(filename, 'r')
-        else:
-            file_idx = 0
-            srcf = h5.File(filename + "." + str(file_idx) + ".h5", 'r')
-
-        while True:
-            if input_format == "h5":
-                if str(index) in srcf:
-                    feature_vector = np.array(srcf[str(index)])
-                elif file_idx != -1:
-                    srcf.close()
-                    file_idx += 1
-                    srcf = h5.File(src_file + "." + str(file_idx) + ".h5", 'r')
-                    feature_vector = np.array(srcf[str(index)])
-                else:
-                    print("No feature vector for index:", index, file=sys.stderr)
-                    break
-
-        raise NotImplementedError
 
     @staticmethod
     def binarize_file_single_thread(filename, ark_loader, offset=0, end=-1, worker_id=0,
                                     input_format='scp', output_format='raw',
                                     prev_context=0, concat=4, stride=1, fp16=False, sample_rate=16000,
                                     verbose=False, num_mel_bin=0):
+
+        audio_processor = None
+
         # if output_format is scp, we only read the length for sorting
         if output_format == 'scp':
-            assert input_format in ['kaldi', 'scp']
-        if output_format == 'wav':
+            raise NotImplementedError
+            # assert input_format in ['kaldi', 'scp']
+        elif output_format == 'wav':
             input_format = 'wav'
-        if input_format == "whisper":
+        elif 'whisper' in output_format:
+
+            input_format = output_format
+            from .whisper_audio import WhisperAudioProcessor
+            audio_processor = WhisperAudioProcessor(output_format)
+            # TODO: get the whisper
             pass
+        else:
+            print("[ERROR] Unknown output format: {}".format(output_format))
+            raise NotImplementedError
 
-        # audio_data = iter(ReadHelper('scp:' + filename))
-        # data_file = open(filename)
-        # data_keys = list(data.keys())
-        # data_paths = list(data._dict.values())
-
+        # placeholder to store the data
         result = dict()
         data = list()
         lengths = list()
@@ -91,34 +71,36 @@ class SpeechBinarizer:
                     continue
 
                 if input_format in ['scp', 'kaldi']:
-                    # an scp file has the format: uttid path:mem
-                    path = parts[1]
-                    # read numpy array from the ark here
-                    feature_vector = ark_loader.load_mat(path)
+                    # # an scp file has the format: uttid path:mem
+                    # path = parts[1]
+                    # # read numpy array from the ark here
+                    # feature_vector = ark_loader.load_mat(path)
+                    #
+                    # if stride == 1:
+                    #     feature_vector = torch.from_numpy(feature_vector)
+                    # else:
+                    #     feature_vector = torch.from_numpy(feature_vector[0::stride])
+                    #
+                    # if concat > 1:
+                    #     add = (concat - feature_vector.size()[0] % concat) % concat
+                    #     z = torch.FloatTensor(add, feature_vector.size()[1]).zero_()
+                    #     feature_vector = torch.cat((feature_vector, z), 0)
+                    #     feature_vector = feature_vector.reshape((int(feature_vector.size()[0] / concat),
+                    #                                              feature_vector.size()[1] * concat))
+                    #
+                    # if prev_context > 0:
+                    #     print("Multiple ASR context isn't supported at the moment   ")
+                    #     raise NotImplementedError
+                    #
+                    # if fp16 and output_format not in ['scp', 'scpmem']:
+                    #     feature_vector = feature_vector.half()
+                    #
+                    # if output_format not in ['scp', 'scpmem']:
+                    #     data.append(feature_vector.numpy())  # convert to numpy for serialization
+                    # else:
+                    #     data.append(path)
 
-                    if stride == 1:
-                        feature_vector = torch.from_numpy(feature_vector)
-                    else:
-                        feature_vector = torch.from_numpy(feature_vector[0::stride])
-
-                    if concat > 1:
-                        add = (concat - feature_vector.size()[0] % concat) % concat
-                        z = torch.FloatTensor(add, feature_vector.size()[1]).zero_()
-                        feature_vector = torch.cat((feature_vector, z), 0)
-                        feature_vector = feature_vector.reshape((int(feature_vector.size()[0] / concat),
-                                                                 feature_vector.size()[1] * concat))
-
-                    if prev_context > 0:
-                        print("Multiple ASR context isn't supported at the moment   ")
-                        raise NotImplementedError
-
-                    if fp16 and output_format not in ['scp', 'scpmem']:
-                        feature_vector = feature_vector.half()
-
-                    if output_format not in ['scp', 'scpmem']:
-                        data.append(feature_vector.numpy())  # convert to numpy for serialization
-                    else:
-                        data.append(path)
+                    raise NotImplementedError
 
                 elif input_format == 'wav':
 
@@ -146,7 +128,13 @@ class SpeechBinarizer:
                     data.append((wavpath, start_time, end_time, sample_rate))
 
                 elif input_format == "whisper":
-                    raise NotImplementedError
+                    if len(parts) >= 4:
+                        wavpath, start_time, end_time = parts[1], float(parts[2]), float(parts[3])
+                    else:
+                        wavpath = parts[1]
+                        start_time = 0
+                        end_time = -1
+
 
                     # # an wav input file should have format uttid wav_file start end
                     # # in which the start and end (by second) can be 0 0
