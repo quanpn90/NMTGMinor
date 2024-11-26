@@ -135,16 +135,10 @@ class SpeechBinarizer:
                         start_time = 0
                         end_time = -1
 
+                    # hardcode the sampling rate for now
+                    feature_vector = audio_processor(wavpath, start_time, end_time, sampling_rate=16000)
 
-                    # # an wav input file should have format uttid wav_file start end
-                    # # in which the start and end (by second) can be 0 0
-                    #
-                    # if len(parts) >= 4:
-                    #     wavpath, start_time, end_time = parts[1], float(parts[2]), float(parts[3])
-                    # else:
-                    #     wavpath = parts[1]
-                    #     start_time = 0
-                    #     end_time = -1
+                    assert feature_vector.size(0) == 3000, "Expecting the length of feature vector to be 3000"
 
                 length = feature_vector.size(0)
                 lengths.append(length)
@@ -348,8 +342,17 @@ class Binarizer:
                                     "The first token must be language ID, expecting %d get %d. Current language: %s" \
                                     % (vocab.convertToIdx([lang], None)[0], tensor[0], ext_tokenizer.src_lang)
 
-                        # pad_id = vocab.convertToIdx(["<pad>"], None)[0]
-                        # assert pad_id not in tensor, "Pad is not supposed to appear in the tensors."
+                    elif "whisper" in external_tokenizer_name.lower():
+                        # if len(tensor) > 2:
+                        #     if tensor[0] not in [0, 1, 2, 3]:
+                        #         _lang = _lang if lang != "eu" else "en_XX"
+                        #         assert tensor[0] == vocab.convertToIdx([lang], None)[0], \
+                        #             "The first token must be language ID, expecting %d get %d. Current language: %s" \
+                        #             % (vocab.convertToIdx([lang], None)[0], tensor[0], ext_tokenizer.src_lang)
+
+                        # TODO: what should we check for in case of whisper tokenizer?
+                        pass
+
 
                     if len(tensor) <= 2:
                         n_bad_sentences += 1
@@ -497,6 +500,20 @@ class Binarizer:
             except FileNotFoundError:
                 ext_tokenizer = NllbTokenizer.from_pretrained("facebook/nllb-200-distilled-600M", src_lang=lang)
                 torch.save(ext_tokenizer, "nllb.tokenizer.pt")
+
+        elif "whisper" in external_tokenizer.lower():
+
+            from transformers import WhisperTokenizerFast
+            tokenizer_name = external_tokenizer.split("/")[-1]
+            try:  # check if this tokenizer is saved locally or not
+
+                # "openai/whisper-large-v3"
+                ext_tokenizer = torch.load(tokenizer_name + ".tokenizer.pt")
+            except FileNotFoundError:
+                ext_tokenizer = WhisperTokenizerFast.from_pretrained("facebook/nllb-200-distilled-600M")
+                torch.save(ext_tokenizer, tokenizer_name + ".tokenizer.pt")
+
+            ext_tokenizer.set_prefix_tokens(language=lang, task="transcribe")
 
         elif external_tokenizer is None or len(external_tokenizer) == 0:
             ext_tokenizer = None

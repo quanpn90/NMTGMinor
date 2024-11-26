@@ -21,7 +21,9 @@ import numpy as np
 import torch
 import torch.utils.checkpoint
 from torch import nn
-from torch.nn import CrossEntropyLoss
+from torch.nn import CrossEntropyLoss, Parameter
+
+from .whisper_config import WhisperConfig
 
 # TODO: copy the whisper code for Encoder and prepare for Decoder
 
@@ -212,19 +214,19 @@ class WhisperAttention(nn.Module):
         self.is_decoder = is_decoder
         self.is_causal = is_causal
 
-
-        if layer_idx is None and is_decoder:
-            logger.warning_once(
-                f"Instantiating a decoder {self.__class__.__name__} without passing `layer_idx` is not recommended and "
-                "will to errors during the forward call, if caching is used. Please make sure to provide a `layer_idx` "
-                "when creating this class."
-            )
+        #
+        # if layer_idx is None and is_decoder:
+        #     logger.warning_once(
+        #         f"Instantiating a decoder {self.__class__.__name__} without passing `layer_idx` is not recommended and "
+        #         "will cause errors during the forward call, if caching is used. Please make sure to provide a `layer_idx` "
+        #         "when creating this class."
+        #     )
         self.layer_idx = layer_idx
 
         self.k_proj = nn.Linear(embed_dim, embed_dim, bias=False)
         self.v_proj = nn.Linear(embed_dim, embed_dim, bias=bias)
         self.q_proj = nn.Linear(embed_dim, embed_dim, bias=bias)
-        self.out_proj = nn.Linear(embed_dim, embed_dim, bias=bias)
+        self.out_proj = nn.Linear(embed_dim, embed_dim, bias=bias)0
 
         self.fast_attention = False
 
@@ -278,6 +280,8 @@ class WhisperAttention(nn.Module):
         self,
         hidden_states: torch.Tensor,
         key_value_states: Optional[torch.Tensor] = None,
+
+        #
         past_key_value: Optional[EncoderDecoderCache] = None,
         attention_mask: Optional[torch.Tensor] = None,
         layer_head_mask: Optional[torch.Tensor] = None,
@@ -299,9 +303,9 @@ class WhisperAttention(nn.Module):
             output [Time x Batch x Hidden]
         """
 
-        # Note: at the point of writing this code, the [TxBxH] scheme is possibly a bit worse than previously
+        # at the point of writing this code, the [TxBxH] scheme is possibly a bit worse than previously
         # due to the fused function in Torch is faster than manual matrix multiplication and softmax
-        # TODO: testing torch _fused_forward and _fused_backward vs MM + softmax
+        # TODO Quan: testing torch _fused_forward and _fused_backward vs MM + softmax
 
         # if key_value_states are provided this layer is used as a cross-attention layer
         # for the decoder
