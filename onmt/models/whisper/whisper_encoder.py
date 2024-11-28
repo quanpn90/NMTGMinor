@@ -226,13 +226,54 @@ class WhisperAttention(nn.Module):
         self.k_proj = nn.Linear(embed_dim, embed_dim, bias=False)
         self.v_proj = nn.Linear(embed_dim, embed_dim, bias=bias)
         self.q_proj = nn.Linear(embed_dim, embed_dim, bias=bias)
-        self.out_proj = nn.Linear(embed_dim, embed_dim, bias=bias)0
+        self.out_proj = nn.Linear(embed_dim, embed_dim, bias=bias)
 
         self.fast_attention = False
 
     # Copied from transformers.models.bart.modeling_bart.BartAttention._shape with BART->whisper
     def _shape(self, tensor: torch.Tensor, seq_len: int, bsz: int):
         return tensor.view(bsz, seq_len, self.num_heads, self.head_dim).transpose(1, 2).contiguous()
+
+    def convert_fast_attention(self):
+
+        # HuggingFace's MBart Attention uses a unoptimized memory layout that requires reshaping
+        # This re-organizes the memory to fit FastAttention and FlashAttention codes
+
+        if self.fast_attention:
+            return
+
+        self.fast_attention = True
+        w_q = self.q_proj.weight.clone()
+        w_k = self.k_proj.weight.clone()
+        w_v = self.v_proj.weight.clone()
+        weights = [w_q, w_k, w_v]
+        weight_ = torch.cat(weights, dim=0).contiguous()
+
+        b_q = self.q_proj.bias.clone()
+        b_k = self.k_proj.bias.clone()
+        b_v = self.v_proj.bias.clone()
+        biases = [b_q, b_k, b_v]
+        bias_ = torch.cat(biases, dim=0).contiguous()
+
+        head_dim = self.head_dim
+        heads = self.num_heads
+        input_dim = self.embed_dim
+
+        weight_ = weight_.reshape(3 * head_dim * heads, input_dim).view(3, heads, head_dim, input_dim).transpose(0, 1). \
+            reshape(-1, input_dim)
+
+        bias_ = bias_.reshape(3 * head_dim * heads).view(3, heads, head_dim).transpose(0, 1).reshape(-1)
+
+        weight_t = torch.Tensor(3 * input_dim, input_dim)
+        bias_t = torch.Tensor(3 * input_dim)
+        weight_t.copy_(weight_)
+        bias_t.copy_(bias_)
+        self.proj_weight = Parameter(weight_t)
+        self.proj_bias = Parameter(bias_t)
+
+        self.proj_weight.requires_grad = self.q_proj.weight.requires_grad
+        self.proj_bias.requires_grad = self.q_proj.bias.requires_grad
+        del self.q_proj, self.k_proj, self.v_proj
 
     def convert_fast_attention(self):
 
@@ -284,24 +325,83 @@ class WhisperAttention(nn.Module):
         #
         past_key_value: Optional[EncoderDecoderCache] = None,
         attention_mask: Optional[torch.Tensor] = None,
-        layer_head_mask: Optional[torch.Tensor] = None,
-        output_attentions: bool = False,
-        cache_position: Optional[torch.LongTensor] = None,
+        cu_seqlens=None, max_len=None,
+        lang=None, atb=None,
+        incremental=False, incremental_cache=None,
+        **kwargs,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
         # """Input shape: Batch x Time x Channel"""
         """
         Args:
-            hidden_states: input shape [Time x Batch x Channel]
+            hidden_states:
             key_value_states:
             past_key_value:
             attention_mask:
-            layer_head_mask:
-            output_attentions:
-            cache_position:
+            cu_seqlens:
+            max_len:
+            lang:
+            atb:
+            incremental:
+            incremental_cache:
+            **kwargs:
 
         Returns:
-            output [Time x Batch x Hidden]
+
         """
+
+        if not self.fast_attention:
+            raise NotImplementedError("Slow attention by HuggingFace is deprecated.")
+
+        if hidden_states.ndim == 3:
+
+            use_time_mask = self.is_decoder
+            qlen, klen = hidden_states.size(0), hidden_states.size(0)
+            mask = attention_mask
+            low_precision = True  # Use CUDA impl
+
+            attn_output, coverage = self_attn_func(use_time_mask, self.training, self.num_heads, hidden_states,
+                                                   in_proj_weight, out_proj_weight,
+                                                   self.proj_bias, self.out_proj.bias,
+                                                   mask, self.dropout,
+                                                   False, None,
+                                                   incremental, incremental_cache, low_precision,
+                                                   True, checkpointing)
+
+            attn_output = attn_output
+
+        else:
+            """
+            flash attention
+            """
+            assert self.fast_bert_mha is not None
+            assert cu_seqlens is not None
+            assert max_len is not None
+            # assert self.is_decoder is False  # only encoder
+            # sm = torch.cuda.get_device_capability()
+
+            # Only Ampere supported at the moment-
+            total_bsz = hidden_states.size(0)
+            qkv = linear_function(hidden_states, in_proj_weight, self.proj_bias)  # B x H
+            # B x 3 x H x d
+
+            # TODO: moving to CUDA to remove overhead?
+            # qkv = qkv.view(total_bsz, self.num_heads, 3, self.head_dim).transpose(1, 2).contiguous()
+
+            # context, coverage = self.fast_bert_mha(qkv, cu_seqlens, self.dropout, max_len, self.training)
+            qkv = qkv.view(total_bsz, self.num_heads, 3, self.head_dim).transpose(1, 2).contiguous()
+
+            dropout_p = self.dropout if self.training else 0.0
+            causal = self.is_decoder
+            softmax_scale = 1.0 / math.sqrt(64)
+            context = self.fast_bert_mha(qkv, cu_seqlens, max_len, dropout_p, softmax_scale, causal, False)
+            coverage = None
+
+            context = context.view(-1, self.num_heads * self.head_dim).contiguous()
+            outputs = linear_function(context, out_proj_weight, self.out_proj.bias)
+
+            attn_output = outputs
+
+        return attn_output, coverage, incremental_cache
 
         # at the point of writing this code, the [TxBxH] scheme is possibly a bit worse than previously
         # due to the fused function in Torch is faster than manual matrix multiplication and softmax
@@ -309,71 +409,71 @@ class WhisperAttention(nn.Module):
 
         # if key_value_states are provided this layer is used as a cross-attention layer
         # for the decoder
-        is_cross_attention = key_value_states is not None
-        bsz, tgt_len, _ = hidden_states.size()
-
-        # get query proj
-        query_states = self._shape(self.q_proj(hidden_states) * self.scaling, tgt_len, bsz)
-
-        # this is only for cross attention
-        if past_key_value is not None:
-            is_updated = past_key_value.is_updated.get(self.layer_idx)
-            if is_cross_attention:
-                # after the first generated id, we can subsequently re-use all key/value_states from cache
-                past_key_value.is_updated[self.layer_idx] = True
-                past_key_value = past_key_value.cross_attention_cache
-            else:
-                past_key_value = past_key_value.self_attention_cache
-
-        # use key_value_states if cross attention
-        current_states = key_value_states if key_value_states is not None else hidden_states
-        if is_cross_attention and past_key_value and is_updated:
-            # reuse k,v, cross_attentions
-            key_states = past_key_value.key_cache[self.layer_idx]
-            value_states = past_key_value.value_cache[self.layer_idx]
-        else:
-            key_states = self._shape(self.k_proj(current_states), -1, bsz)
-            value_states = self._shape(self.v_proj(current_states), -1, bsz)
-            if past_key_value is not None:
-                # save all key/value_states to cache to be re-used for fast auto-regressive generation
-                cache_position = cache_position if not is_cross_attention else None
-                key_states, value_states = past_key_value.update(
-                    key_states, value_states, self.layer_idx, {"cache_position": cache_position}
-                )
-
-        attn_weights = torch.matmul(query_states, key_states.transpose(2, 3))
-
-        if attention_mask is not None:  # no matter the length, we just slice it
-            causal_mask = attention_mask[:, :, :, : key_states.shape[-2]]
-            attn_weights = attn_weights + causal_mask
-
-        attn_weights = nn.functional.softmax(attn_weights, dim=-1)
-
-        if layer_head_mask is not None:
-            if layer_head_mask.size() != (self.num_heads,):
-                raise ValueError(
-                    f"Head mask for a single layer should be of size {(self.num_heads,)}, but is"
-                    f" {layer_head_mask.size()}"
-                )
-            attn_weights = layer_head_mask.view(1, -1, 1, 1) * attn_weights
-
-        attn_probs = nn.functional.dropout(attn_weights, p=self.dropout, training=self.training)
-        attn_output = torch.matmul(attn_probs, value_states)
-
-        if attn_output.size() != (bsz, self.num_heads, tgt_len, self.head_dim):
-            raise ValueError(
-                f"`attn_output` should be of size {(bsz, self.num_heads, tgt_len, self.head_dim)}, but is"
-                f" {attn_output.size()}"
-            )
-
-        attn_output = attn_output.transpose(1, 2)
-        # Use the `embed_dim` from the config (stored in the class) rather than `hidden_state` because `attn_output` can be
-        # partitioned across GPUs when using tensor-parallelism.
-        attn_output = attn_output.reshape(bsz, tgt_len, self.embed_dim)
-
-        attn_output = self.out_proj(attn_output)
-
-        return attn_output, attn_weights, past_key_value
+        # is_cross_attention = key_value_states is not None
+        # tgt_len, bsz, _ = hidden_states.size()
+        #
+        # # get query proj
+        # query_states = self._shape(self.q_proj(hidden_states) * self.scaling, tgt_len, bsz)
+        #
+        # # this is only for cross attention
+        # if past_key_value is not None:
+        #     is_updated = past_key_value.is_updated.get(self.layer_idx)
+        #     if is_cross_attention:
+        #         # after the first generated id, we can subsequently re-use all key/value_states from cache
+        #         past_key_value.is_updated[self.layer_idx] = True
+        #         past_key_value = past_key_value.cross_attention_cache
+        #     else:
+        #         past_key_value = past_key_value.self_attention_cache
+        #
+        # # use key_value_states if cross attention
+        # current_states = key_value_states if key_value_states is not None else hidden_states
+        # if is_cross_attention and past_key_value and is_updated:
+        #     # reuse k,v, cross_attentions
+        #     key_states = past_key_value.key_cache[self.layer_idx]
+        #     value_states = past_key_value.value_cache[self.layer_idx]
+        # else:
+        #     key_states = self._shape(self.k_proj(current_states), -1, bsz)
+        #     value_states = self._shape(self.v_proj(current_states), -1, bsz)
+        #     if past_key_value is not None:
+        #         # save all key/value_states to cache to be re-used for fast auto-regressive generation
+        #         cache_position = cache_position if not is_cross_attention else None
+        #         key_states, value_states = past_key_value.update(
+        #             key_states, value_states, self.layer_idx, {"cache_position": cache_position}
+        #         )
+        #
+        # attn_weights = torch.matmul(query_states, key_states.transpose(2, 3))
+        #
+        # if attention_mask is not None:  # no matter the length, we just slice it
+        #     causal_mask = attention_mask[:, :, :, : key_states.shape[-2]]
+        #     attn_weights = attn_weights + causal_mask
+        #
+        # attn_weights = nn.functional.softmax(attn_weights, dim=-1)
+        #
+        # if layer_head_mask is not None:
+        #     if layer_head_mask.size() != (self.num_heads,):
+        #         raise ValueError(
+        #             f"Head mask for a single layer should be of size {(self.num_heads,)}, but is"
+        #             f" {layer_head_mask.size()}"
+        #         )
+        #     attn_weights = layer_head_mask.view(1, -1, 1, 1) * attn_weights
+        #
+        # attn_probs = nn.functional.dropout(attn_weights, p=self.dropout, training=self.training)
+        # attn_output = torch.matmul(attn_probs, value_states)
+        #
+        # if attn_output.size() != (bsz, self.num_heads, tgt_len, self.head_dim):
+        #     raise ValueError(
+        #         f"`attn_output` should be of size {(bsz, self.num_heads, tgt_len, self.head_dim)}, but is"
+        #         f" {attn_output.size()}"
+        #     )
+        #
+        # attn_output = attn_output.transpose(1, 2)
+        # # Use the `embed_dim` from the config (stored in the class) rather than `hidden_state` because `attn_output` can be
+        # # partitioned across GPUs when using tensor-parallelism.
+        # attn_output = attn_output.reshape(bsz, tgt_len, self.embed_dim)
+        #
+        # attn_output = self.out_proj(attn_output)
+        #
+        # return attn_output, attn_weights, past_key_value
 
 
 
@@ -384,7 +484,7 @@ class WhisperEncoderLayer(nn.Module):
         super().__init__()
         self.embed_dim = config.d_model
 
-        self.self_attn = WHISPER_ATTENTION_CLASSES[config._attn_implementation](
+        self.self_attn = WhisperAttention(
             embed_dim=self.embed_dim,
             num_heads=config.encoder_attention_heads,
             dropout=config.attention_dropout,
