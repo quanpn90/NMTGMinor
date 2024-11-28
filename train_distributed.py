@@ -114,27 +114,6 @@ def run_process(gpu, train_data, valid_data, dicts, opt, checkpoint, constants):
     trainer.run(checkpoint=checkpoint, train_data=train_data, valid_data=valid_data)
 
 
-def run_gem_process(gpu, train_data, valid_data, dicts, opt, checkpoint, constants):
-    """
-    Launch training for Gradient Episodic Memory
-
-    Args:
-        gpu:
-        train_data:
-        valid_data:
-        dicts:
-        opt:
-        checkpoint:
-        constants:
-
-    Returns:
-
-    """
-    from onmt.train_utils.gem_trainer import GEMTrainer
-
-    trainer = GEMTrainer(gpu, train_data, valid_data, dicts, opt, constants)
-    trainer.run(checkpoint=checkpoint)
-
 
 def main(gpu, opt):
 
@@ -202,40 +181,30 @@ def main(gpu, opt):
                 train_src_atbs.append(torch.Tensor([dicts['atbs']['nothingness']]))
                 train_tgt_atbs.append(torch.Tensor([dicts['atbs']['nothingness']]))
 
-            if not opt.streaming:
-                constants = dill.dumps(onmt.constants)
+            constants = dill.dumps(onmt.constants)
 
-                train_data = onmt.Dataset(numpy_to_torch(train_dict['src']), numpy_to_torch(train_dict['tgt']),
-                                          train_dict['src_sizes'], train_dict['tgt_sizes'],
-                                          train_src_langs, train_tgt_langs,
-                                          train_src_atbs, train_tgt_atbs,
-                                          batch_size_words=opt.batch_size_words,
-                                          batch_size_frames=opt.batch_size_frames,
-                                          data_type=dataset.get("type", "text"), sorting=True, cleaning=True,
-                                          batch_size_sents=opt.batch_size_sents,
-                                          multiplier=opt.batch_size_multiplier,
-                                          augment=opt.augment_speech, sa_f=opt.sa_f, sa_t=opt.sa_t,
-                                          max_src_len=opt.max_src_length,
-                                          max_tgt_len=opt.max_tgt_length,
-                                          input_size=opt.input_size,
-                                          upsampling=opt.upsampling,
-                                          num_split=1,
-                                          constants=constants,
-                                          use_memory=hasattr(opt, "use_memory") and opt.use_memory, validation=False,
-                                          concat=opt.concat_dataset,
-                                          char_data=char_data,
-                                          use_char_level=opt.char_ctc,
-                                          create_reverse=(opt.mirror_loss > 0),
-                                          device=gpu)
-            else:
-                train_data = onmt.StreamDataset(train_dict['src'], train_dict['tgt'],
-                                                train_src_langs, train_tgt_langs,
-                                                batch_size_words=opt.batch_size_words,
-                                                data_type=dataset.get("type", "text"), sorting=True,
-                                                batch_size_sents=opt.batch_size_sents,
-                                                multiplier=opt.batch_size_multiplier,
-                                                augment=opt.augment_speech,
-                                                upsampling=opt.upsampling)
+            train_data = onmt.Dataset(numpy_to_torch(train_dict['src']), numpy_to_torch(train_dict['tgt']),
+                                      train_dict['src_sizes'], train_dict['tgt_sizes'],
+                                      train_src_langs, train_tgt_langs,
+                                      train_src_atbs, train_tgt_atbs,
+                                      batch_size_words=opt.batch_size_words,
+                                      batch_size_frames=opt.batch_size_frames,
+                                      data_type=dataset.get("type", "text"), sorting=True, cleaning=True,
+                                      batch_size_sents=opt.batch_size_sents,
+                                      multiplier=opt.batch_size_multiplier,
+                                      augment=opt.augment_speech, sa_f=opt.sa_f, sa_t=opt.sa_t,
+                                      max_src_len=opt.max_src_length,
+                                      max_tgt_len=opt.max_tgt_length,
+                                      input_size=opt.input_size,
+                                      upsampling=opt.upsampling,
+                                      num_split=1,
+                                      constants=constants,
+                                      use_memory=hasattr(opt, "use_memory") and opt.use_memory, validation=False,
+                                      concat=opt.concat_dataset,
+                                      char_data=char_data,
+                                      use_char_level=opt.char_ctc,
+                                      create_reverse=(opt.mirror_loss > 0),
+                                      device=gpu)
 
             dicts['tgt_pad'] = train_data.tgt_pad
 
@@ -264,35 +233,27 @@ def main(gpu, opt):
                 valid_src_atbs.append(torch.Tensor([dicts['atbs']['nothingness']]))
                 valid_tgt_atbs.append(torch.Tensor([dicts['atbs']['nothingness']]))
 
-            if not opt.streaming:
-                constants = dill.dumps(onmt.constants)
+            constants = dill.dumps(onmt.constants)
 
-                valid_data = onmt.Dataset(numpy_to_torch(valid_dict['src']), numpy_to_torch(valid_dict['tgt']),
-                                          valid_dict['src_sizes'], valid_dict['tgt_sizes'],
-                                          valid_src_langs, valid_tgt_langs,
-                                          valid_src_atbs, valid_tgt_atbs,
-                                          batch_size_words=opt.batch_size_words,
-                                          batch_size_frames=opt.batch_size_frames,
-                                          data_type=dataset.get("type", "text"), sorting=True,
-                                          batch_size_sents=opt.batch_size_sents,
-                                          max_src_len=opt.max_src_length,
-                                          max_tgt_len=opt.max_tgt_length,
-                                          multiplier=opt.batch_size_multiplier,
-                                          upsampling=opt.upsampling,
-                                          input_size=opt.input_size,
-                                          constants=constants,
-                                          use_memory=hasattr(opt, "use_memory") and opt.use_memory,
-                                          char_data=char_data,
-                                          use_char_level=opt.char_ctc,
-                                          create_reverse=(opt.mirror_loss > 0),
-                                          device=gpu)
-            else:
-                valid_data = onmt.StreamDataset(numpy_to_torch(valid_dict['src']), numpy_to_torch(valid_dict['tgt']),
-                                                valid_src_langs, valid_tgt_langs,
-                                                batch_size_words=opt.batch_size_words,
-                                                data_type=dataset.get("type", "text"), sorting=True,
-                                                batch_size_sents=opt.batch_size_sents,
-                                                upsampling=opt.upsampling)
+            valid_data = onmt.Dataset(numpy_to_torch(valid_dict['src']), numpy_to_torch(valid_dict['tgt']),
+                                      valid_dict['src_sizes'], valid_dict['tgt_sizes'],
+                                      valid_src_langs, valid_tgt_langs,
+                                      valid_src_atbs, valid_tgt_atbs,
+                                      batch_size_words=opt.batch_size_words,
+                                      batch_size_frames=opt.batch_size_frames,
+                                      data_type=dataset.get("type", "text"), sorting=True,
+                                      batch_size_sents=opt.batch_size_sents,
+                                      max_src_len=opt.max_src_length,
+                                      max_tgt_len=opt.max_tgt_length,
+                                      multiplier=opt.batch_size_multiplier,
+                                      upsampling=opt.upsampling,
+                                      input_size=opt.input_size,
+                                      constants=constants,
+                                      use_memory=hasattr(opt, "use_memory") and opt.use_memory,
+                                      char_data=char_data,
+                                      use_char_level=opt.char_ctc,
+                                      create_reverse=(opt.mirror_loss > 0),
+                                      device=gpu)
 
             lprint(' * number of training sentences. %d' % len(dataset['train']['src']))
             lprint(' * maximum batch size (words per batch). %d' % opt.batch_size_words)
@@ -388,42 +349,32 @@ def main(gpu, opt):
             else:
                 data_type = 'text'
 
-            if not opt.streaming:
-                constants = dill.dumps(onmt.constants)
+            constants = dill.dumps(onmt.constants)
 
-                train_data = onmt.Dataset(train_src,
-                                          train_tgt,
-                                          train_src_sizes, train_tgt_sizes,
-                                          train_src_langs, train_tgt_langs,
-                                          train_src_atbs, train_tgt_atbs,
-                                          batch_size_words=opt.batch_size_words,
-                                          batch_size_frames=opt.batch_size_frames,
-                                          data_type=data_type, sorting=True,
-                                          batch_size_sents=opt.batch_size_sents,
-                                          multiplier=opt.batch_size_multiplier,
-                                          augment=opt.augment_speech, sa_f=opt.sa_f, sa_t=opt.sa_t,
-                                          cleaning=True, verbose=True,
-                                          input_size=opt.input_size,
-                                          past_src_data=past_train_src,
-                                          past_src_data_sizes=past_train_src_sizes,
-                                          max_src_len=opt.max_src_length,
-                                          max_tgt_len=opt.max_tgt_length,
-                                          constants=constants,
-                                          use_memory=hasattr(opt, "use_memory") and opt.use_memory, validation=False,
-                                          concat=opt.concat_dataset,
-                                          char_data=char_data,
-                                          use_char_level=opt.char_ctc,
-                                          create_reverse=(opt.mirror_loss > 0),
-                                          device=gpu)
-            else:
-                train_data = onmt.StreamDataset(train_src,
-                                                train_tgt,
-                                                train_src_langs, train_tgt_langs,
-                                                batch_size_words=opt.batch_size_words,
-                                                data_type=data_type, sorting=False,
-                                                batch_size_sents=opt.batch_size_sents,
-                                                multiplier=opt.batch_size_multiplier,
-                                                upsampling=opt.upsampling)
+            train_data = onmt.Dataset(train_src,
+                                      train_tgt,
+                                      train_src_sizes, train_tgt_sizes,
+                                      train_src_langs, train_tgt_langs,
+                                      train_src_atbs, train_tgt_atbs,
+                                      batch_size_words=opt.batch_size_words,
+                                      batch_size_frames=opt.batch_size_frames,
+                                      data_type=data_type, sorting=True,
+                                      batch_size_sents=opt.batch_size_sents,
+                                      multiplier=opt.batch_size_multiplier,
+                                      augment=opt.augment_speech, sa_f=opt.sa_f, sa_t=opt.sa_t,
+                                      cleaning=True, verbose=True,
+                                      input_size=opt.input_size,
+                                      past_src_data=past_train_src,
+                                      past_src_data_sizes=past_train_src_sizes,
+                                      max_src_len=opt.max_src_length,
+                                      max_tgt_len=opt.max_tgt_length,
+                                      constants=constants,
+                                      use_memory=hasattr(opt, "use_memory") and opt.use_memory, validation=False,
+                                      concat=opt.concat_dataset,
+                                      char_data=char_data,
+                                      use_char_level=opt.char_ctc,
+                                      create_reverse=(opt.mirror_loss > 0),
+                                      device=gpu)
 
             dicts['tgt_pad'] = train_data.tgt_pad
 
@@ -481,38 +432,30 @@ def main(gpu, opt):
             else:
                 past_valid_src_sizes = None
 
-            if not opt.streaming:
-                constants = dill.dumps(onmt.constants)
+            constants = dill.dumps(onmt.constants)
 
-                valid_data = onmt.Dataset(valid_src, valid_tgt,
-                                          valid_src_sizes, valid_tgt_sizes,
-                                          valid_src_langs, valid_tgt_langs,
-                                          valid_src_atbs, valid_tgt_atbs,
-                                          batch_size_words=opt.batch_size_words,
-                                          batch_size_frames=opt.batch_size_frames,
-                                          multiplier=opt.batch_size_multiplier,
-                                          data_type=data_type, sorting=True,
-                                          input_size=opt.input_size,
-                                          batch_size_sents=opt.batch_size_sents,
-                                          cleaning=True, verbose=True, debug=True,
-                                          past_src_data=past_valid_src,
-                                          past_src_data_sizes=past_valid_src_sizes,
-                                          max_src_len=opt.max_src_length,
-                                          max_tgt_len=opt.max_tgt_length,
-                                          min_src_len=1, min_tgt_len=3,
-                                          constants=constants,
-                                          use_memory=hasattr(opt, "use_memory") and opt.use_memory,
-                                          char_data=char_data,
-                                          use_char_level=opt.char_ctc,
-                                          create_reverse=(opt.mirror_loss > 0),
-                                          device=gpu)
-            else:
-                # for validation data, we have to go through sentences (very slow but to ensure correctness)
-                valid_data = onmt.StreamDataset(valid_src, valid_tgt,
-                                                valid_src_langs, valid_tgt_langs,
-                                                batch_size_words=opt.batch_size_words,
-                                                data_type=data_type, sorting=True,
-                                                batch_size_sents=opt.batch_size_sents)
+            valid_data = onmt.Dataset(valid_src, valid_tgt,
+                                      valid_src_sizes, valid_tgt_sizes,
+                                      valid_src_langs, valid_tgt_langs,
+                                      valid_src_atbs, valid_tgt_atbs,
+                                      batch_size_words=opt.batch_size_words,
+                                      batch_size_frames=opt.batch_size_frames,
+                                      multiplier=opt.batch_size_multiplier,
+                                      data_type=data_type, sorting=True,
+                                      input_size=opt.input_size,
+                                      batch_size_sents=opt.batch_size_sents,
+                                      cleaning=True, verbose=True, debug=True,
+                                      past_src_data=past_valid_src,
+                                      past_src_data_sizes=past_valid_src_sizes,
+                                      max_src_len=opt.max_src_length,
+                                      max_tgt_len=opt.max_tgt_length,
+                                      min_src_len=1, min_tgt_len=3,
+                                      constants=constants,
+                                      use_memory=hasattr(opt, "use_memory") and opt.use_memory,
+                                      char_data=char_data,
+                                      use_char_level=opt.char_ctc,
+                                      create_reverse=(opt.mirror_loss > 0),
+                                      device=gpu)
 
             elapse = str(datetime.timedelta(seconds=int(time.time() - start)))
             lprint("Done after %s" % elapse)
@@ -610,45 +553,38 @@ def main(gpu, opt):
                 else:
                     data_type = 'text'
 
-                if not opt.streaming:
+                constants = dill.dumps(onmt.constants)
 
+                train_data = onmt.Dataset(src_data,
+                                          tgt_data,
+                                          src_sizes, tgt_sizes,
+                                          src_lang_data, tgt_lang_data,
+                                          src_atbs_data, tgt_atbs_data,
+                                          batch_size_words=opt.batch_size_words,
+                                          batch_size_frames=opt.batch_size_frames,
+                                          data_type=data_type, sorting=True,
+                                          batch_size_sents=opt.batch_size_sents,
+                                          multiplier=opt.batch_size_multiplier,
+                                          upsampling=opt.upsampling,
+                                          augment=opt.augment_speech, sa_f=opt.sa_f, sa_t=opt.sa_t,
+                                          cleaning=True, verbose=True,
+                                          max_src_len=opt.max_src_length,
+                                          max_tgt_len=opt.max_tgt_length,
+                                          input_size=opt.input_size,
+                                          constants=constants,
+                                          dataset_factor=dataset_factors.get(idx_),
+                                          use_memory=hasattr(opt, "use_memory") and opt.use_memory, validation=False,
+                                          concat=opt.concat_dataset,
+                                          char_data=char_data,
+                                          use_char_level=opt.char_ctc,
+                                          create_reverse=(opt.mirror_loss > 0),
+                                          device=gpu)
 
-                    constants = dill.dumps(onmt.constants)
+                if c == 1:
+                    dicts['tgt_pad'] = train_data.get_tgt_pad()
+                    del src_sizes, tgt_sizes, src_data, tgt_data, src_lang_data, tgt_lang_data
 
-                    train_data = onmt.Dataset(src_data,
-                                              tgt_data,
-                                              src_sizes, tgt_sizes,
-                                              src_lang_data, tgt_lang_data,
-                                              src_atbs_data, tgt_atbs_data,
-                                              batch_size_words=opt.batch_size_words,
-                                              batch_size_frames=opt.batch_size_frames,
-                                              data_type=data_type, sorting=True,
-                                              batch_size_sents=opt.batch_size_sents,
-                                              multiplier=opt.batch_size_multiplier,
-                                              upsampling=opt.upsampling,
-                                              augment=opt.augment_speech, sa_f=opt.sa_f, sa_t=opt.sa_t,
-                                              cleaning=True, verbose=True,
-                                              max_src_len=opt.max_src_length,
-                                              max_tgt_len=opt.max_tgt_length,
-                                              input_size=opt.input_size,
-                                              constants=constants,
-                                              dataset_factor=dataset_factors.get(idx_),
-                                              use_memory=hasattr(opt, "use_memory") and opt.use_memory, validation=False,
-                                              concat=opt.concat_dataset,
-                                              char_data=char_data,
-                                              use_char_level=opt.char_ctc,
-                                              create_reverse=(opt.mirror_loss > 0),
-                                              device=gpu)
-
-                    if c == 1:
-                        dicts['tgt_pad'] = train_data.get_tgt_pad()
-                        del src_sizes, tgt_sizes, src_data, tgt_data, src_lang_data, tgt_lang_data
-
-                    train_sets.append(train_data)
-
-                else:
-                    lprint("Multi-dataset not implemented for Streaming tasks.")
-                    raise NotImplementedError
+                train_sets.append(train_data)
 
         for (idx_, dir_) in sorted(valid_dirs.items()):
 
@@ -701,32 +637,28 @@ def main(gpu, opt):
                 else:
                     data_type = 'text'
 
-                if not opt.streaming:
-                    constants = dill.dumps(onmt.constants)
+                constants = dill.dumps(onmt.constants)
 
-                    valid_data = onmt.Dataset(src_data, tgt_data,
-                                              src_sizes, tgt_sizes,
-                                              src_lang_data, tgt_lang_data,
-                                              src_atbs_data, tgt_atbs_data,
-                                              batch_size_words=opt.batch_size_words,
-                                              batch_size_frames=opt.batch_size_frames,
-                                              multiplier=opt.batch_size_multiplier,
-                                              data_type=data_type, sorting=True,
-                                              batch_size_sents=opt.batch_size_sents,
-                                              min_src_len=1, min_tgt_len=3,
-                                              input_size=opt.input_size,
-                                              cleaning=True, verbose=True,
-                                              constants=constants,
-                                              use_memory=hasattr(opt, "use_memory") and opt.use_memory,
-                                              char_data=char_data,
-                                              use_char_level=opt.char_ctc,
-                                              create_reverse=(opt.mirror_loss > 0),
-                                              device=gpu)
+                valid_data = onmt.Dataset(src_data, tgt_data,
+                                          src_sizes, tgt_sizes,
+                                          src_lang_data, tgt_lang_data,
+                                          src_atbs_data, tgt_atbs_data,
+                                          batch_size_words=opt.batch_size_words,
+                                          batch_size_frames=opt.batch_size_frames,
+                                          multiplier=opt.batch_size_multiplier,
+                                          data_type=data_type, sorting=True,
+                                          batch_size_sents=opt.batch_size_sents,
+                                          min_src_len=1, min_tgt_len=3,
+                                          input_size=opt.input_size,
+                                          cleaning=True, verbose=True,
+                                          constants=constants,
+                                          use_memory=hasattr(opt, "use_memory") and opt.use_memory,
+                                          char_data=char_data,
+                                          use_char_level=opt.char_ctc,
+                                          create_reverse=(opt.mirror_loss > 0),
+                                          device=gpu)
 
-                    valid_sets.append(valid_data)
-
-                else:
-                    raise NotImplementedError
+                valid_sets.append(valid_data)
 
         train_data = train_sets
         valid_data = valid_sets
@@ -760,11 +692,7 @@ def main(gpu, opt):
     # each process has a different trainer
     constants = dill.dumps(onmt.constants)
 
-    if opt.gem_training:
-        run_gem_process(gpu, train_data, valid_data, dicts, opt, checkpoint, constants)
-    else:
-        run_process(gpu, train_data, valid_data, dicts, opt, checkpoint, constants)
-
+    run_process(gpu, train_data, valid_data, dicts, opt, checkpoint, constants)
 
 
 if __name__ == "__main__":

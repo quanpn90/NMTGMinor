@@ -12,8 +12,8 @@ import torch
 import onmt
 import numpy as np
 from .audio_utils import ArkLoader, safe_readaudio, wav_to_fmel
-# from .whisper_audio import log_mel_spectrogram
 import torchaudio
+import math
 
 
 class SpeechBinarizer:
@@ -33,6 +33,8 @@ class SpeechBinarizer:
             # assert input_format in ['kaldi', 'scp']
         elif output_format == 'wav':
             input_format = 'wav'
+
+        # TODO: revise this input/output format here
         elif 'whisper' in output_format:
 
             input_format = output_format
@@ -127,7 +129,7 @@ class SpeechBinarizer:
                     # store a tuple of data and information to load the wav again during training
                     data.append((wavpath, start_time, end_time, sample_rate))
 
-                elif input_format == "whisper":
+                elif 'whisper' in input_format:
                     if len(parts) >= 4:
                         wavpath, start_time, end_time = parts[1], float(parts[2]), float(parts[3])
                     else:
@@ -505,13 +507,8 @@ class Binarizer:
 
             from transformers import WhisperTokenizerFast
             tokenizer_name = external_tokenizer.split("/")[-1]
-            try:  # check if this tokenizer is saved locally or not
 
-                # "openai/whisper-large-v3"
-                ext_tokenizer = torch.load(tokenizer_name + ".tokenizer.pt")
-            except FileNotFoundError:
-                ext_tokenizer = WhisperTokenizerFast.from_pretrained("facebook/nllb-200-distilled-600M")
-                torch.save(ext_tokenizer, tokenizer_name + ".tokenizer.pt")
+            ext_tokenizer = WhisperTokenizerFast.from_pretrained(external_tokenizer)
 
             ext_tokenizer.set_prefix_tokens(language=lang, task="transcribe")
 

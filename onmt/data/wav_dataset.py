@@ -12,7 +12,8 @@ import os
 
 class WavDataset(torch.utils.data.Dataset):
     def __init__(self, wav_path_list, cache_size=0,
-                 wav_path_replace=None, num_mel_bin=0, specaugment=False):
+                 wav_path_replace=None, num_mel_bin=0,
+                 specaugment=False, processor="none"):
         """
         param wav_path_list: list of path to the audio
         param cache_size: size of the cache to load wav files (in case multiple wavefiles are used)
@@ -55,6 +56,19 @@ class WavDataset(torch.utils.data.Dataset):
             if not found:
                 print(wav_path_replace, self.wav_path_list[0][0])
                 print("WARNING: Could not replace wav path")
+
+        # the processor that extracts logmel features
+        # the w2vbert model from fairseq uses torch/fairseq
+        # while whisper model uses "whisper" which also pads the data length so use that accordingly
+        self.processor_type = processor
+        assert self.processor_type in ["fairseq", "torch"] or "whisper" in self.processor_type
+        self.processor = None
+
+        if self.num_mel_bin > 1 and "whisper" in self.processor_type:
+            from onmt.data.whisper_audio import WhisperAudioProcessor
+            audio_processor = WhisperAudioProcessor(self.processor_type)
+
+            self.processor = audio_processor
 
     def flush_cache(self):
 
@@ -118,7 +132,7 @@ class WavDataset(torch.utils.data.Dataset):
             file_ = None
             data = safe_readaudio(wav_path, start=start, end=end, sample_rate=sample_rate)
 
-        #TODO: specaugment
+        # TODO: implement specaugment specaugment
         if self.specaugment:
             # the expected data is [1, T] while the model input is [T, 1]
             old_data = data
@@ -133,6 +147,12 @@ class WavDataset(torch.utils.data.Dataset):
 
         # extract fmel features AFTER spec augmentation
         if self.num_mel_bin > 0:
-            data = wav_to_fmel(data, num_mel_bin=self.num_mel_bin)
+
+            if self.processor_type in ['torch', 'fairseq']:
+                data = wav_to_fmel(data, num_mel_bin=self.num_mel_bin)
+            elif 'whisper' in self.processor_type:
+                data = self.processor.extract_feature(data.sum(1), sampling_rate=sample_rate)
+            else:
+                raise NotImplementedError
 
         return data

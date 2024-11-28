@@ -139,6 +139,54 @@ def build_tm_model(opt, dicts, constants=None, verbose=True):
         generators = [onmt.modules.base_seq2seq.Generator(opt.model_size, dicts['tgt'].size(),
                                                           fix_norm=opt.fix_norm_output_embedding)]
 
+    if opt.model in ['whisper']:
+
+        from onmt.models.speech_recognizer.whisper import WhisperModel
+
+        from onmt.models.whisper.whisper_config import WhisperConfig
+        from onmt.models.whisper.whisper_encoder import WhisperEncoder
+        from onmt.models.whisper.whisper_decoder import WhisperDecoder
+
+        print_v("[INFO] Created Whisper Encoder from: %s ..." % opt.enc_config_file)
+        whisper_config = WhisperConfig.from_json_file(opt.dec_config_file)
+
+        encoder = WhisperEncoder(whisper_config)
+        decoder = WhisperDecoder(whisper_config)
+
+        # share all embeddings
+        generators[0].linear.weight = decoder.embed_tokens.weight
+
+        if opt.dec_state_dict is not None and len(opt.dec_state_dict) > 1:
+            print_v("[INFO] Loading weights for decoder from: %s ..." % opt.dec_state_dict)
+            dec_model_state_dict = torch.load(opt.dec_state_dict, map_location="cpu")
+
+            # current_dict = decoder.state_dict()
+            #
+            # for key in current_dict:
+            #     if key not in dec_model_state_dict:
+            #         dec_model_state_dict[key] = current_dict[key]
+
+            decoder.load_state_dict(dec_model_state_dict)
+            print_v("[INFO] ... Done")
+
+        if opt.enc_state_dict is not None and len(opt.enc_state_dict) > 1:
+            print_v("[INFO] Loading weights for encoder from: %s ..." % opt.dec_state_dict)
+            enc_model_state_dict = torch.load(opt.enc_state_dict, map_location="cpu")
+
+            # current_dict = decoder.state_dict()
+            #
+            # for key in current_dict:
+            #     if key not in dec_model_state_dict:
+            #         dec_model_state_dict[key] = current_dict[key]
+
+            encoder.load_state_dict(enc_model_state_dict)
+            print_v("[INFO] ... Done")
+
+        model = WhisperModel(encoder, decoder, generators)
+        print(model)
+
+        return model
+
     # BUILD EMBEDDINGS
     if 'src' in dicts:
         if (not hasattr(opt, "enc_pretrained_model")) or (not opt.enc_pretrained_model):
@@ -259,9 +307,9 @@ def build_tm_model(opt, dicts, constants=None, verbose=True):
                         print_v("[INFO] Loading weights for (sub) mBART encoder from: %s ..." % opt.enc_state_dict)
                         enc_model_state_dict = torch.load(opt.enc_state_dict, map_location="cpu")
                         sub_encoder.load_state_dict(enc_model_state_dict)
-                    for parameter in sub_encoder.parameters():
-                        # parameter.requires_grad = False  # don't update these guys
-                        sub_encoder.embed_tokens = decoder.embed_tokens  # and reduce memory usage
+                    # for parameter in sub_encoder.parameters():
+                    #     # parameter.requires_grad = False  # don't update these guys
+                    sub_encoder.embed_tokens = decoder.embed_tokens  # and reduce memory usage
 
             elif opt.dec_pretrained_model in ['deltalm']:
                 print_v("[INFO] Created DeltaLM decoder from: %s ..." % opt.dec_config_file)
