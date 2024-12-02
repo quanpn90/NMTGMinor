@@ -298,7 +298,7 @@ def main(gpu, opt):
             elif opt.data_format in ['wav']:
                 train_src = WavDataset(audio_data['train'], cache_size=opt.data_cache_size,
                                        wav_path_replace=opt.wav_path_replace, num_mel_bin=opt.num_mel_bin,
-                                       specaugment=opt.augment_speech)
+                                       specaugment=opt.augment_speech, processor=opt.wav_processor)
                 past_train_src = None
             else:
                 train_src = MMapIndexedDataset(train_path + '.src')
@@ -389,7 +389,7 @@ def main(gpu, opt):
             elif opt.data_format in ['wav']:
                 valid_src = WavDataset(audio_data['valid'], cache_size=opt.data_cache_size,
                                        wav_path_replace=opt.wav_path_replace, num_mel_bin=opt.num_mel_bin,
-                                       specaugment=False)
+                                       specaugment=False, processor=opt.wav_processor)
                 past_valid_src = None
             else:
                 valid_src = MMapIndexedDataset(valid_path + '.src')
@@ -522,7 +522,7 @@ def main(gpu, opt):
                     audio_data = torch.load(os.path.join(data_dir, "data.scp_path.pt"))
                     src_data = WavDataset(audio_data, cache_size=opt.data_cache_size,
                                           wav_path_replace=opt.wav_path_replace, num_mel_bin=opt.num_mel_bin,
-                                          specaugment=opt.augment_speech)
+                                          specaugment=opt.augment_speech, processor=opt.wav_processor)
                 else:
                     src_data = MMapIndexedDataset(os.path.join(data_dir, "data.src"))
 
@@ -604,7 +604,7 @@ def main(gpu, opt):
                     audio_data = torch.load(os.path.join(data_dir, "data.scp_path.pt"))
                     src_data = WavDataset(audio_data, cache_size=opt.data_cache_size,
                                           wav_path_replace=opt.wav_path_replace, num_mel_bin=opt.num_mel_bin,
-                                          specaugment=False)
+                                          specaugment=False, processor=opt.wav_processor)
                 else:
                     src_data = MMapIndexedDataset(os.path.join(data_dir, "data.src"))
 

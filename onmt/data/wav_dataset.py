@@ -61,14 +61,14 @@ class WavDataset(torch.utils.data.Dataset):
         # the w2vbert model from fairseq uses torch/fairseq
         # while whisper model uses "whisper" which also pads the data length so use that accordingly
         self.processor_type = processor
-        assert self.processor_type in ["fairseq", "torch"] or "whisper" in self.processor_type
         self.processor = None
+        if self.num_mel_bin > 1:
+            assert self.processor_type in ["fairseq", "torch", "none"] or "whisper" in self.processor_type
 
-        if self.num_mel_bin > 1 and "whisper" in self.processor_type:
-            from onmt.data.whisper_audio import WhisperAudioProcessor
-            audio_processor = WhisperAudioProcessor(self.processor_type)
-
-            self.processor = audio_processor
+            if "whisper" in self.processor_type:
+                from onmt.data.whisper_audio import WhisperAudioProcessor
+                audio_processor = WhisperAudioProcessor(self.processor_type)
+                self.processor  = audio_processor
 
     def flush_cache(self):
 

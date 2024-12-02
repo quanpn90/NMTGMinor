@@ -222,7 +222,7 @@ class NMTLossFunc(CrossEntropyLossBase):
                         loss_constraint=0.0001):
 
         logits = model_outputs['logprobs']
-        pad_mask = targets.eq(self.padding_idx)
+        pad_mask = model_outputs['tgt_mask']
 
         tgt_len, bsz = logits.size(0), logits.size(1)
         logits = logits.view(-1, logits.size(-1))

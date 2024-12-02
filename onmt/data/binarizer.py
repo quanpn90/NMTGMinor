@@ -21,29 +21,26 @@ class SpeechBinarizer:
 
     @staticmethod
     def binarize_file_single_thread(filename, ark_loader, offset=0, end=-1, worker_id=0,
-                                    input_format='scp', output_format='raw',
+                                    format='wav',
                                     prev_context=0, concat=4, stride=1, fp16=False, sample_rate=16000,
                                     verbose=False, num_mel_bin=0):
 
         audio_processor = None
 
         # if output_format is scp, we only read the length for sorting
-        if output_format == 'scp':
+        if format == 'scp':
             raise NotImplementedError
             # assert input_format in ['kaldi', 'scp']
-        elif output_format == 'wav':
-            input_format = 'wav'
+        elif format == 'wav':
+            pass
+        elif 'whisper' in format:
 
-        # TODO: revise this input/output format here
-        elif 'whisper' in output_format:
-
-            input_format = output_format
             from .whisper_audio import WhisperAudioProcessor
-            audio_processor = WhisperAudioProcessor(output_format)
+            audio_processor = WhisperAudioProcessor(format)
             # TODO: get the whisper
             pass
         else:
-            print("[ERROR] Unknown output format: {}".format(output_format))
+            print("[ERROR] Unknown output format: {}".format(format))
             raise NotImplementedError
 
         # placeholder to store the data
@@ -72,7 +69,7 @@ class SpeechBinarizer:
                     line = f.readline()
                     continue
 
-                if input_format in ['scp', 'kaldi']:
+                if format in ['scp', 'kaldi']:
                     # # an scp file has the format: uttid path:mem
                     # path = parts[1]
                     # # read numpy array from the ark here
@@ -104,7 +101,7 @@ class SpeechBinarizer:
 
                     raise NotImplementedError
 
-                elif input_format == 'wav':
+                elif format == 'wav':
 
                     # an wav input file should have format uttid wav_file start end
                     # in which the start and end (by second) can be 0 0
@@ -129,7 +126,7 @@ class SpeechBinarizer:
                     # store a tuple of data and information to load the wav again during training
                     data.append((wavpath, start_time, end_time, sample_rate))
 
-                elif 'whisper' in input_format:
+                elif 'whisper' in format:
                     if len(parts) >= 4:
                         wavpath, start_time, end_time = parts[1], float(parts[2]), float(parts[3])
                     else:
@@ -141,6 +138,8 @@ class SpeechBinarizer:
                     feature_vector = audio_processor(wavpath, start_time, end_time, sampling_rate=16000)
 
                     assert feature_vector.size(0) == 3000, "Expecting the length of feature vector to be 3000"
+
+                    data.append((wavpath, start_time, end_time, sample_rate))
 
                 length = feature_vector.size(0)
                 lengths.append(length)
@@ -160,7 +159,7 @@ class SpeechBinarizer:
         return result
 
     @staticmethod
-    def binarize_file(filename, input_format='scp', output_format='raw', num_mel_bin=0,
+    def binarize_file(filename, format='raw', num_mel_bin=0,
                       prev_context=0, concat=4, stride=1, fp16=False, num_workers=1, verbose=False):
 
         result = dict()
@@ -178,9 +177,9 @@ class SpeechBinarizer:
 
         ark_loaders = dict()
         for i in range(num_workers):
-            if input_format in ['scp', 'kaldi']:
+            if format in ['scp', 'kaldi']:
                 ark_loaders[i] = ArkLoader()
-            elif input_format in ['wav']:
+            elif format in ['wav']:
                 from .audio_utils import WavLoader
                 ark_loaders[i] = WavLoader()
             else:
@@ -195,7 +194,7 @@ class SpeechBinarizer:
                 mp_results.append(pool.apply_async(
                     SpeechBinarizer.binarize_file_single_thread,
                     args=(filename, ark_loaders[worker_id], offsets[worker_id], offsets[worker_id + 1], worker_id,
-                          input_format, output_format, prev_context, concat, stride, fp16, 16000, verbose, num_mel_bin),
+                          format, prev_context, concat, stride, fp16, 16000, verbose, num_mel_bin),
                 ))
 
             pool.close()
@@ -206,7 +205,7 @@ class SpeechBinarizer:
 
         else:
             sp_result = SpeechBinarizer.binarize_file_single_thread(filename, ark_loaders[0], offsets[0], offsets[1], 0,
-                                                                    input_format='scp', output_format=output_format,
+                                                                    format=format,
                                                                     prev_context=prev_context, concat=concat,
                                                                     stride=stride, fp16=fp16, verbose=verbose, num_mel_bin=num_mel_bin)
             merge_result(sp_result)

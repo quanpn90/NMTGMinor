@@ -7,7 +7,7 @@ from onmt.modules.optimized.linear import Linear, linear_function
 
 class Generator(nn.Module):
 
-    def __init__(self, hidden_size, output_size, fix_norm=False):
+    def __init__(self, hidden_size, output_size, fix_norm=False, bias=True):
         
         super(Generator, self).__init__()
         self.hidden_size = hidden_size

@@ -539,7 +539,7 @@ def make_asr_data(src_file, tgt_file, tgt_dicts, tokenizer,
                   max_src_length=64, max_tgt_length=64, add_bos=True, data_type='int64', num_mel_bin=0,
                   num_workers=1, verbose=False,
                   input_type='word', stride=1, concat=4, prev_context=0, fp16=False, reshape=True,
-                  asr_format="scp", output_format="raw",
+                  format="wav",
                   external_tokenizer=None, src_lang=None, tgt_lang=None, lang_list=[]):
     src, tgt = [], []
     src_sizes = []
@@ -573,11 +573,8 @@ def make_asr_data(src_file, tgt_file, tgt_dicts, tokenizer,
 
     print('[INFO] Processing %s  ...' % src_file)
 
-    # num_workers = num_workers if asr_format in ['scp', 'kaldi'] else 1
-
     # speech binarizer has to be 1 thread at the moment
-    binarized_src = SpeechBinarizer.binarize_file(src_file, input_format=asr_format,
-                                                  output_format=output_format, concat=concat,
+    binarized_src = SpeechBinarizer.binarize_file(src_file, format=format, concat=concat,
                                                   stride=stride, fp16=fp16, prev_context=prev_context,
                                                   num_workers=num_workers, verbose=verbose, num_mel_bin=num_mel_bin)
 
@@ -752,9 +749,8 @@ def main():
                                                                      prev_context=opt.previous_context,
                                                                      fp16=opt.fp16,
                                                                      add_bos=not opt.no_bos,
-                                                                     asr_format=opt.asr_format,
+                                                                     format=opt.asr_format,
                                                                      num_mel_bin=opt.num_mel_bin,
-                                                                     output_format=opt.format,
                                                                      num_workers=opt.num_threads,
                                                                      external_tokenizer=opt.external_tokenizer,
                                                                      tgt_lang=tgt_lang, verbose=opt.verbose,
@@ -793,8 +789,7 @@ def main():
                                                                     add_bos=not opt.no_bos,
                                                                     fp16=opt.fp16,
                                                                     num_mel_bin=opt.num_mel_bin,
-                                                                    asr_format=opt.asr_format,
-                                                                    output_format=opt.format,
+                                                                    format=opt.asr_format,
                                                                     num_workers=opt.num_threads,
                                                                     external_tokenizer=opt.external_tokenizer,
                                                                     tgt_lang=tgt_lang, verbose=opt.verbose,
@@ -897,11 +892,12 @@ def main():
                                                                      fp16=opt.fp16,
                                                                      num_mel_bin=opt.num_mel_bin,
                                                                      add_bos=not opt.no_bos,
-                                                                     asr_format=opt.asr_format,
-                                                                     output_format=opt.format,
+                                                                     format=opt.asr_format,
                                                                      external_tokenizer=opt.external_tokenizer,
                                                                      tgt_lang=tgt_lang, verbose=opt.verbose,
-                                                                     lang_list=dicts['langs'])
+                                                                     lang_list=dicts['langs'],
+                                                                     num_workers=opt.num_threads,
+                                                                     )
 
             n_samples = len(src_data)
             if n_input_files == 1 or opt.multi_dataset:
@@ -934,8 +930,7 @@ def main():
                                                                     fp16=opt.fp16,
                                                                     add_bos=not opt.no_bos,
                                                                     num_mel_bin=opt.num_mel_bin,
-                                                                    asr_format=opt.asr_format,
-                                                                    output_format=opt.format,
+                                                                    format=opt.asr_format,
                                                                     num_workers=opt.num_threads,
                                                                     external_tokenizer=opt.external_tokenizer,
                                                                     tgt_lang=tgt_lang, verbose=opt.verbose,

@@ -136,8 +136,12 @@ def build_tm_model(opt, dicts, constants=None, verbose=True):
                               noise_distribution=noise_distribution, noise_ratio=opt.nce_noise)
         generators = [generator]
     else:
+
+        bias = not (opt.model in ['whisper'])
+
         generators = [onmt.modules.base_seq2seq.Generator(opt.model_size, dicts['tgt'].size(),
-                                                          fix_norm=opt.fix_norm_output_embedding)]
+                                                          fix_norm=opt.fix_norm_output_embedding,
+                                                          bias=bias)]
 
     if opt.model in ['whisper']:
 
@@ -153,18 +157,13 @@ def build_tm_model(opt, dicts, constants=None, verbose=True):
         encoder = WhisperEncoder(whisper_config)
         decoder = WhisperDecoder(whisper_config)
 
-        # share all embeddings
+        # share embeddings
         generators[0].linear.weight = decoder.embed_tokens.weight
+        decoder.embed_tokens.weight.requires_grad = False # freeze these embeddings
 
         if opt.dec_state_dict is not None and len(opt.dec_state_dict) > 1:
             print_v("[INFO] Loading weights for decoder from: %s ..." % opt.dec_state_dict)
             dec_model_state_dict = torch.load(opt.dec_state_dict, map_location="cpu")
-
-            # current_dict = decoder.state_dict()
-            #
-            # for key in current_dict:
-            #     if key not in dec_model_state_dict:
-            #         dec_model_state_dict[key] = current_dict[key]
 
             decoder.load_state_dict(dec_model_state_dict)
             print_v("[INFO] ... Done")
@@ -173,16 +172,10 @@ def build_tm_model(opt, dicts, constants=None, verbose=True):
             print_v("[INFO] Loading weights for encoder from: %s ..." % opt.dec_state_dict)
             enc_model_state_dict = torch.load(opt.enc_state_dict, map_location="cpu")
 
-            # current_dict = decoder.state_dict()
-            #
-            # for key in current_dict:
-            #     if key not in dec_model_state_dict:
-            #         dec_model_state_dict[key] = current_dict[key]
-
             encoder.load_state_dict(enc_model_state_dict)
             print_v("[INFO] ... Done")
 
-        model = WhisperModel(encoder, decoder, generators)
+        model = WhisperModel(encoder, decoder, generator=nn.ModuleList(generators))
         print(model)
 
         return model
@@ -841,8 +834,10 @@ def init_model_parameters(model, opt, verbose=True):
             m.reset_parameters(init=opt.init)
         elif classname.find('PositionWiseFeedForward') != -1:
             m.reset_parameters(init=opt.init)
+    if opt.model in ['whisper']:
+        pass
 
-    if opt.model not in ["pretrain_transformer", "wav2vec2_transformer", "wav2vec2_bert", "wav2vec2"]:
+    elif opt.model not in ["pretrain_transformer", "wav2vec2_transformer", "wav2vec2_bert", "wav2vec2", ]:
         print_v('[INFO] Initializing entire model parameters')
         model.apply(weights_init)
     elif opt.model in ['wav2vec2_transformer']:
@@ -981,6 +976,10 @@ def optimize_model(model, fp16=True, distributed=False):
             elif classname.find('BartAttention') != -1:
                 m_.convert_fast_attention()
             elif classname.find('BartCrossAttention') != -1:
+                m_.convert_fast_attention()
+            elif classname.find('WhisperAttention') != -1:
+                m_.convert_fast_attention()
+            elif classname.find('WhisperCrossAttention') != -1:
                 m_.convert_fast_attention()
 
         m.apply(convert)

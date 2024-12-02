@@ -648,6 +648,8 @@ def make_parser(parser):
 
     parser.add_argument('-num_mel_bin', type=int, default=0,
                         help='Number of log mel bins for feature extraction. 0 = use waveforms ')
+    parser.add_argument('-wav_processor', default="torch", type=str,
+                        help="The waveform processor: either 'torch' or 'whisper")
 
 
     return parser

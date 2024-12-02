@@ -22,6 +22,7 @@ class WhisperModel(Wav2vecTransformer):
                  mirror=False,
                  **kwargs):
         super().__init__(encoder, decoder, generator, mirror=mirror, ctc=False)
+        self.generator = generator
 
         self.src_vocab_size = 0
         self.model_size = encoder.model_size
@@ -84,7 +85,9 @@ class WhisperModel(Wav2vecTransformer):
         # step 1: extract the actual data and then forward encoder
 
         # during training mixture is always None
-        encoder_output = self.encoder(src, batch_first_output=batch_first_output)
+        encoder_output = self.encoder(src,
+                                      batch_first_output=batch_first_output,
+                                      output_attentions=False)
 
         context = encoder_output[0]
         src_attention_mask = None
@@ -102,7 +105,10 @@ class WhisperModel(Wav2vecTransformer):
         #                                checkpointing_cross_attn=checkpointing_cross_attn,
         #                                checkpointing_self_attn=checkpointing_self_attn)
 
+        tgt_attention_mask = batch.get('target_input_selfattn_mask')
+
         decoder_outputs = self.decoder( input_ids=tgt,
+                                        attention_mask=tgt_attention_mask,
                                         encoder_hidden_states=context)
 
         decoder_output = decoder_outputs[0]

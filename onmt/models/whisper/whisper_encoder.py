@@ -236,6 +236,8 @@ class WhisperAttention(nn.Module):
         self.out_proj = nn.Linear(embed_dim, embed_dim, bias=bias)
 
         self.fast_attention = False
+        from onmt.modules.optimized.flash_mha import flash_bert_mha
+        self.fast_bert_mha = flash_bert_mha
 
     # Copied from transformers.models.bart.modeling_bart.BartAttention._shape with BART->whisper
     def _shape(self, tensor: torch.Tensor, seq_len: int, bsz: int):
@@ -256,12 +258,6 @@ class WhisperAttention(nn.Module):
         weights = [w_q, w_k, w_v]
         weight_ = torch.cat(weights, dim=0).contiguous()
 
-        b_q = self.q_proj.bias.clone()
-        b_k = self.k_proj.bias.clone()
-        b_v = self.v_proj.bias.clone()
-        biases = [b_q, b_k, b_v]
-        bias_ = torch.cat(biases, dim=0).contiguous()
-
         head_dim = self.head_dim
         heads = self.num_heads
         input_dim = self.embed_dim
@@ -269,58 +265,12 @@ class WhisperAttention(nn.Module):
         weight_ = weight_.reshape(3 * head_dim * heads, input_dim).view(3, heads, head_dim, input_dim).transpose(0, 1). \
             reshape(-1, input_dim)
 
-        bias_ = bias_.reshape(3 * head_dim * heads).view(3, heads, head_dim).transpose(0, 1).reshape(-1)
-
         weight_t = torch.Tensor(3 * input_dim, input_dim)
-        bias_t = torch.Tensor(3 * input_dim)
         weight_t.copy_(weight_)
-        bias_t.copy_(bias_)
         self.proj_weight = Parameter(weight_t)
-        self.proj_bias = Parameter(bias_t)
+        self.proj_bias = None
 
         self.proj_weight.requires_grad = self.q_proj.weight.requires_grad
-        self.proj_bias.requires_grad = self.q_proj.bias.requires_grad
-        del self.q_proj, self.k_proj, self.v_proj
-
-    def convert_fast_attention(self):
-
-        # HuggingFace's MBart Attention uses an unoptimized memory layout that requires reshaping
-        # This re-organizes the memory to fit FastAttention and FlashAttention codes
-
-        if self.fast_attention:
-            return
-
-        self.fast_attention = True
-        w_q = self.q_proj.weight.clone()
-        w_k = self.k_proj.weight.clone()
-        w_v = self.v_proj.weight.clone()
-        weights = [w_q, w_k, w_v]
-        weight_ = torch.cat(weights, dim=0).contiguous()
-
-        b_q = self.q_proj.bias.clone()
-        b_k = self.k_proj.bias.clone()
-        b_v = self.v_proj.bias.clone()
-        biases = [b_q, b_k, b_v]
-        bias_ = torch.cat(biases, dim=0).contiguous()
-
-        head_dim = self.head_dim
-        heads = self.num_heads
-        input_dim = self.embed_dim
-
-        weight_ = weight_.reshape(3 * head_dim * heads, input_dim).view(3, heads, head_dim, input_dim).transpose(0, 1). \
-            reshape(-1, input_dim)
-
-        bias_ = bias_.reshape(3 * head_dim * heads).view(3, heads, head_dim).transpose(0, 1).reshape(-1)
-
-        weight_t = torch.Tensor(3 * input_dim, input_dim)
-        bias_t = torch.Tensor(3 * input_dim)
-        weight_t.copy_(weight_)
-        bias_t.copy_(bias_)
-        self.proj_weight = Parameter(weight_t)
-        self.proj_bias = Parameter(bias_t)
-
-        self.proj_weight.requires_grad = self.q_proj.weight.requires_grad
-        self.proj_bias.requires_grad = self.q_proj.bias.requires_grad
         del self.q_proj, self.k_proj, self.v_proj
 
     # the main difference here is the cache position
@@ -396,7 +346,7 @@ class WhisperAttention(nn.Module):
 
             dropout_p = self.dropout if self.training else 0.0
             causal = self.is_decoder
-            softmax_scale = 1.0 / math.sqrt(64)
+            softmax_scale = 1.0 / math.sqrt(self.head_dim)
             context = self.fast_bert_mha(qkv, cu_seqlens, max_len, dropout_p, softmax_scale, causal, False)
             coverage = None
 
@@ -503,7 +453,7 @@ class WhisperEncoderLayer(nn.Module):
     def forward(
             self,
             hidden_states: torch.Tensor,
-            output_attentions: bool = False,
+            output_attentions,
             max_len=-1, cu_seqlens=None,
             **kwargs,
     ) -> torch.Tensor:
@@ -528,15 +478,16 @@ class WhisperEncoderLayer(nn.Module):
             cu_seqlens=cu_seqlens,
             max_len=max_len
         )
-        hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
+        hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training, inplace=True)
         hidden_states = residual + hidden_states
 
         residual = hidden_states
         hidden_states = self.final_layer_norm(hidden_states)
         hidden_states = self.activation_fn(self.fc1(hidden_states))
-        hidden_states = nn.functional.dropout(hidden_states, p=self.activation_dropout, training=self.training)
+        hidden_states = nn.functional.dropout(hidden_states, p=self.activation_dropout,
+                                              training=self.training, inplace=True)
         hidden_states = self.fc2(hidden_states)
-        hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
+        hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training, inplace=True)
         hidden_states = residual + hidden_states
 
         if hidden_states.dtype == torch.float16 and (
@@ -602,6 +553,10 @@ class WhisperEncoder(WhisperPreTrainedModel):
 
     def __init__(self, config: WhisperConfig):
         super().__init__(config)
+
+        self.model_size = config.d_model
+        self.input_type = "audio"
+
         self.dropout = config.dropout
         self.layerdrop = config.encoder_layerdrop
 
@@ -642,8 +597,8 @@ class WhisperEncoder(WhisperPreTrainedModel):
             self,
             input_features,
             batch_first_output=False,
-            output_attentions=None,
-            output_hidden_states=None,
+            output_attentions=False,
+            output_hidden_states=False,
             **kwargs
     ):
         """
@@ -661,9 +616,11 @@ class WhisperEncoder(WhisperPreTrainedModel):
         feature_size = input_features.size(2)
         assert feature_size == 129
 
-        # maybe this is not necessary at all
+        # remove the padding dimension
         with torch.no_grad():
-            input_features = input_features.narrow(2, 1, input.size(2) - 1)
+            input_features = input_features.narrow(2, 1, feature_size - 1)
+
+        # print("[INFO] Encoder input: ", input_features.size())
 
         expected_seq_length = self.config.max_source_positions * self.conv1.stride[0] * self.conv2.stride[0]
         if input_features.shape[1] != expected_seq_length:
@@ -684,37 +641,49 @@ class WhisperEncoder(WhisperPreTrainedModel):
         inputs_embeds = nn.functional.gelu(self.conv2(inputs_embeds))
 
         # B x H x T_ -> B x T_ x H
-        inputs_embeds = inputs_embeds.permute(0, 2, 1)
+        inputs_embeds = inputs_embeds.permute(0, 2, 1).contiguous()
         embed_pos = self.embed_positions.weight
 
         hidden_states = inputs_embeds + embed_pos
-        hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
+        hidden_states = nn.functional.dropout(hidden_states,
+                                              p=self.dropout,
+                                              training=self.training,
+                                              inplace=True)
 
         encoder_states = () if output_hidden_states else None
         all_attentions = () if output_attentions else None
 
-        x = hidden_states
-        bsz, seq_len = x.size(0), x.size(1)
+        # record the seq_len after downsampling
+        bsz, seq_len = hidden_states.size(0), hidden_states.size(1)
 
-        if self.fast_bert_mha and x.dtype == torch.half:
+        is_autocast = torch.is_autocast_enabled()
+        autocast_dtype = torch.get_autocast_gpu_dtype()
+        # print(is_autocast, autocast_dtype)
+
+        if self.fast_bert_mha and is_autocast and (autocast_dtype == torch.float16 or autocast_dtype == torch.bfloat16):
             can_run_fast_bert_mha = True
-            org_x = x
 
             # whisper doesn't use padding mask, so the list of length is simple
-            lengths = [seq_len[0].item()] * bsz
+            lengths = [seq_len] * bsz
 
             # resize for 2D
-            x = x.view(-1, x.size(-1)).contiguous()  # flatten [B x T]
+            hidden_states = hidden_states.view(-1, hidden_states.size(-1)).contiguous()  # flatten [B x T]
 
             max_len = lengths[0]
             # cumulative sequence lengths (required input for fmha)
             a = torch.tensor(np.array([0] + lengths), dtype=torch.int32)
-            cu_seqlens = torch.cumsum(a, 0).to(dtype=torch.int32, device=x.device)
+            cu_seqlens = torch.cumsum(a, 0).to(dtype=torch.int32, device=hidden_states.device)
 
         else:
             can_run_fast_bert_mha = False
             max_len = -1
             cu_seqlens = None
+            hidden_states = hidden_states.transpose(0, 1).contiguous()
+
+        if can_run_fast_bert_mha:
+            assert hidden_states.ndim == 2, "Flash Attention is used. Expecting 2D inputs!"
+
+        # print("[INFO] Transformer Encoder input: ", hidden_states.size())
 
         for idx, encoder_layer in enumerate(self.layers):
             if output_hidden_states:
@@ -738,9 +707,10 @@ class WhisperEncoder(WhisperPreTrainedModel):
                 #         max_len, cu_seqlens
                 #     )
                 # else:
+                # print('[INFO] Encoder layer %d ' % idx, hidden_states.size())
+
                 layer_outputs = encoder_layer(
                     hidden_states,
-                    None,
                     output_attentions=output_attentions,
                     max_len=max_len, cu_seqlens=cu_seqlens
 
@@ -753,10 +723,20 @@ class WhisperEncoder(WhisperPreTrainedModel):
 
         hidden_states = self.layer_norm(hidden_states)
 
-        if batch_first_output:
-            hidden_states = hidden_states.transpose(0, 1).contiguous()
+        if can_run_fast_bert_mha:
+            hidden_states = hidden_states.view(bsz, seq_len, -1)
+
+            if not batch_first_output:
+                # B x T x H --> T x B x H
+                hidden_states = hidden_states.transpose(0, 1).contiguous()
+        else:
+            # T x B x H -> B x T x H
+            if batch_first_output:
+                hidden_states = hidden_states.transpose(0, 1).contiguous()
 
         if output_hidden_states:
             encoder_states = encoder_states + (hidden_states,)
+
+        # print("[INFO] Encoder output: ", hidden_states.size())
 
         return tuple(v for v in [hidden_states, encoder_states, all_attentions] if v is not None)

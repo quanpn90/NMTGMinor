@@ -66,7 +66,10 @@ class EncdecAttnBiasFunc(torch.autograd.Function):
         ctx.recompute = recompute
         ctx.rotary_pos_enc = rotary_pos_enc
 
-        if encdec_multihead_attn_bias_cuda is not None and not incremental and len_k <= 2048 \
+        all_biases = input_bias_q is not None and input_bias_kv is not None and output_bias is not None
+        ctx.all_biases = all_biases
+
+        if encdec_multihead_attn_bias_cuda is not None and not incremental and len_k <= 2048 and all_biases \
                 and inputs_q.type() == 'torch.cuda.HalfTensor' and not rotary_pos_enc and low_precision:
 
             mask_ = mask
@@ -150,10 +153,17 @@ class EncdecAttnBiasFunc(torch.autograd.Function):
         # input2: (weights)     [embed_dim, embed_dim]. transpose(0, 1)
         # output:               [len_q * bsz, embed_dim] -> [seql_q, bsz, embed_dim]
         # GEMM: ( (seql_q*seqs) x embed_dim ) x ( embed_dim x embed_dim ) = (seql_q*seqs x embed_dim)
-        input_lin_q_results = torch.addmm(input_bias_q,
-                                          inputs_q.view(inputs_q.size(0) * inputs_q.size(1), inputs_q.size(2)),
-                                          input_weights_q.transpose(0, 1),
-                                          beta=1., alpha=1.)
+        if input_bias_q is not None:
+            input_lin_q_results = torch.addmm(input_bias_q,
+                                              inputs_q.view(inputs_q.size(0) * inputs_q.size(1), inputs_q.size(2)),
+                                              input_weights_q.transpose(0, 1),
+                                              beta=1., alpha=1.)
+
+        else:
+            input_lin_q_results = torch.mm(inputs_q.view(inputs_q.size(0) * inputs_q.size(1), inputs_q.size(2)),
+                                           input_weights_q.transpose(0, 1))
+
+
         input_lin_q_results = input_lin_q_results.view(inputs_q.size(0), inputs_q.size(1), input_weights_q.size(0))
 
         queries = input_lin_q_results.view(inputs_q.size(0), inputs_q.size(1) * heads, head_dim)
@@ -176,10 +186,15 @@ class EncdecAttnBiasFunc(torch.autograd.Function):
             input_lin_kv_results = torch.stack([keys, values], dim=-2)
         else:
             #print("inputs_kv",inputs_kv.shape, "len_kv x b x d_model")
-            input_lin_kv_results = torch.addmm(input_bias_kv,
-                                               inputs_kv.view(inputs_kv.size(0) * inputs_kv.size(1), inputs_kv.size(2)),
-                                               input_weights_kv.transpose(0, 1),
-                                               beta=1., alpha=1.)
+            if input_bias_kv is not None:
+                input_lin_kv_results = torch.addmm(input_bias_kv,
+                                                   inputs_kv.view(inputs_kv.size(0) * inputs_kv.size(1), inputs_kv.size(2)),
+                                                   input_weights_kv.transpose(0, 1),
+                                                   beta=1., alpha=1.)
+            else:
+                input_lin_kv_results = torch.mm(inputs_kv.view(inputs_kv.size(0) * inputs_kv.size(1), inputs_kv.size(2)),
+                                                   input_weights_kv.transpose(0, 1))
+
             input_lin_kv_results = input_lin_kv_results.view(inputs_kv.size(0), inputs_kv.size(1),
                                                              input_weights_kv.size(0))
 
@@ -269,7 +284,6 @@ class EncdecAttnBiasFunc(torch.autograd.Function):
             torch.bmm(dropout_results, values.transpose(0, 1), out=matmul2_results.transpose(1, 0))
         else:
             matmul2_results = torch.matmul(dropout_results, values.transpose(0, 1)).transpose(0, 1)
-        #print("matmul2_results", matmul2_results.shape, "len_q x b*heads x head_dim")
 
         # view from [len_q, bsz*heads, head_dim] to [len_q, bsz, embed]
         matmul2_results = matmul2_results.contiguous().view(inputs_q.size(0), inputs_q.size(1), inputs_q.size(2))
@@ -279,10 +293,16 @@ class EncdecAttnBiasFunc(torch.autograd.Function):
         # Input2: (weights)     [ embed_dim, embed_dim ] transpose(0,1)
         # Output:               [ seql_q, seqs, embed_dim ]
         # GEMM: ( seql_q*seqs x embed_dim ) x ( embed_dim x embed_dim ) = ( seql_q*seqs x embed_dim )
-        outputs = torch.addmm(output_bias,
-                              matmul2_results.view(inputs_q.size(0) * inputs_q.size(1), inputs_q.size(2)),
-                              output_weights.transpose(0, 1),
-                              beta=1., alpha=1.)
+        if output_bias is not None:
+
+            outputs = torch.addmm(output_bias,
+                                  matmul2_results.view(inputs_q.size(0) * inputs_q.size(1), inputs_q.size(2)),
+                                  output_weights.transpose(0, 1),
+                                  beta=1., alpha=1.)
+        else:
+            outputs = torch.mm(matmul2_results.view(inputs_q.size(0) * inputs_q.size(1), inputs_q.size(2)),
+                                  output_weights.transpose(0, 1))
+
         outputs = outputs.view(inputs_q.size(0), inputs_q.size(1), output_weights.size(0))
         #print("outputs", outputs.shape, "len_q x b x d_model")
 
@@ -618,7 +638,10 @@ class EncdecAttnBiasFunc(torch.autograd.Function):
             input_weight_q_grads = torch.mm(queries_grads.transpose(0, 1),
                                             inputs_q.view(inputs_q.size(0) * inputs_q.size(1), inputs_q.size(2)))
 
-            input_bias_q_grads = torch.sum(queries_grads, 0)
+            if ctx.all_biases:
+                input_bias_q_grads = torch.sum(queries_grads, 0)
+            else:
+                input_bias_q_grads = None
         else:
             input_weight_q_grads, input_bias_q_grads = None, None
         # Input KV Linear GEMM - WGRAD
@@ -631,7 +654,10 @@ class EncdecAttnBiasFunc(torch.autograd.Function):
             input_weight_kv_grads = torch.mm(input_lin_kv_results_grads.transpose(0, 1),
                                              inputs_kv.view(inputs_kv.size(0) * inputs_kv.size(1), inputs_kv.size(2)))
 
-            input_bias_kv_grads = torch.sum(input_lin_kv_results_grads, 0)
+            if ctx.all_biases:
+                input_bias_kv_grads = torch.sum(input_lin_kv_results_grads, 0)
+            else:
+                input_bias_kv_grads = None
         else:
             input_weight_kv_grads, input_bias_kv_grads = None, None
 

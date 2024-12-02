@@ -77,8 +77,11 @@ class SelfAttnFunc(torch.autograd.Function):
 
         bsz, len_q = inputs.size(1), inputs.size(0)
 
+        all_biases = input_biases is not None and output_biases is not None
+        ctx.all_biases = all_biases
+
         # print(low_precision, incremental, inputs.type())
-        if low_precision and self_multihead_attn_blaslt is not None and not incremental and len_q <= 2048 \
+        if low_precision and self_multihead_attn_blaslt is not None and not incremental and len_q <= 2048 and all_biases \
                 and inputs.type() == 'torch.cuda.HalfTensor' \
                 and not rotary_pos_enc:
             ctx.fused = True
@@ -134,10 +137,16 @@ class SelfAttnFunc(torch.autograd.Function):
         # input2: (weights)     [embed_dim*3 (3072), embed_dim (1024)] (transpose [0,1])
         # output:               [seql_q, seqs, embed_dim*3]
         # GEMM: ( (seql_q*seqs) x embed_dim ) x ( embed_dim x embed_dim*3 ) = (seql_q*seqs x embed_dim*3)
-        input_lin_results = torch.addmm(input_biases,
-                                        inputs.view(inputs.size(0) * inputs.size(1), inputs.size(2)),
-                                        input_weights.transpose(0, 1),
-                                        beta=1., alpha=1.)
+
+        if all_biases:
+
+            input_lin_results = torch.addmm(input_biases,
+                                            inputs.view(inputs.size(0) * inputs.size(1), inputs.size(2)),
+                                            input_weights.transpose(0, 1),
+                                            beta=1., alpha=1.)
+        else:
+            input_lin_results = torch.mm(inputs.view(inputs.size(0) * inputs.size(1), inputs.size(2)),
+                                         input_weights.transpose(0, 1))
 
         input_lin_results = input_lin_results.view(inputs.size(0), inputs.size(1), input_weights.size(0))
 
@@ -245,10 +254,14 @@ class SelfAttnFunc(torch.autograd.Function):
         # Input2: (weights)     [ embed_dim, embed_dim ] transpose(0,1)
         # Output:               [ seql_q, seqs, embed_dim ]
         # GEMM: ( seql_q*seqs x embed_dim ) x ( embed_dim x embed_dim ) = ( seql_q*seqs x embed_dim )
-        outputs = torch.addmm(output_biases,
-                              matmul2_results.view(inputs.size(0) * inputs.size(1), inputs.size(2)),
-                              output_weights.transpose(0, 1),
-                              beta=1., alpha=1.)
+        if all_biases:
+            outputs = torch.addmm(output_biases,
+                                  matmul2_results.view(inputs.size(0) * inputs.size(1), inputs.size(2)),
+                                  output_weights.transpose(0, 1),
+                                  beta=1., alpha=1.)
+        else:
+            outputs = torch.mm(matmul2_results.view(inputs.size(0) * inputs.size(1), inputs.size(2)),
+                                  output_weights.transpose(0, 1))
 
         outputs = outputs.view(inputs.size(0), inputs.size(1), output_weights.size(0))
 
@@ -403,8 +416,12 @@ class SelfAttnFunc(torch.autograd.Function):
             output_weight_grads = torch.mm(
                 output_grads.view(output_grads.size(0) * output_grads.size(1), output_grads.size(2)).transpose(0, 1),
                 matmul2_results.view(matmul2_results.size(0) * matmul2_results.size(1), matmul2_results.size(2)))
-            output_bias_grads = torch.sum(
-                output_grads.view(output_grads.size(0) * output_grads.size(1), output_grads.size(2)), 0)
+
+            if ctx.all_biases:
+                output_bias_grads = torch.sum(
+                    output_grads.view(output_grads.size(0) * output_grads.size(1), output_grads.size(2)), 0)
+            else:
+                output_bias_grads = None
         else:
             output_weight_grads = None
             output_bias_grads = None
@@ -472,7 +489,10 @@ class SelfAttnFunc(torch.autograd.Function):
             input_weight_grads = torch.mm(input_lin_results_grads.transpose(0, 1),
                                           inputs.view(inputs.size(0) * inputs.size(1), inputs.size(2)))
 
-            input_bias_grads = torch.sum(input_lin_results_grads, 0)
+            if ctx.all_biases:
+                input_bias_grads = torch.sum(input_lin_results_grads, 0)
+            else:
+                input_bias_grads = None
         else:
             input_weight_grads = None
             input_bias_grads = None

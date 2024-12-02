@@ -16,6 +16,7 @@ from onmt.modules.optimized.linear import linear_function, factorize_linear
 from onmt.modules.optimized.self_attention_func import self_attn_func, self_attn_compact_func
 from onmt.modules.optimized.encdec_attention_func_bias import encdec_attn_bias_func, encdec_attn_bias_compact_func
 
+from onmt.models.speech_recognizer.fairseq_wav2vec2.fairseq_modules import index_copy
 
 
 class WhisperCrossAttention(WhisperAttention):
@@ -51,11 +52,6 @@ class WhisperCrossAttention(WhisperAttention):
         weights = [w_k, w_v]
         weight_ = torch.cat(weights, dim=0).contiguous()
 
-        b_k = self.k_proj.bias.clone()
-        b_v = self.v_proj.bias.clone()
-        biases = [b_k, b_v]
-        bias_ = torch.cat(biases, dim=0).contiguous()
-
         head_dim = self.head_dim
         heads = self.num_heads
         input_dim = self.embed_dim
@@ -63,17 +59,11 @@ class WhisperCrossAttention(WhisperAttention):
         weight_ = weight_.reshape(2 * head_dim * heads, input_dim).view(2, heads, head_dim, input_dim).transpose(0, 1). \
             reshape(-1, input_dim)
 
-        bias_ = bias_.reshape(2 * head_dim * heads).view(2, heads, head_dim).transpose(0, 1).reshape(-1)
-
         weight_t = torch.Tensor(2 * input_dim, input_dim)
-        bias_t = torch.Tensor(2 * input_dim)
         weight_t.copy_(weight_)
-        bias_t.copy_(bias_)
         self.proj_weight_kv = Parameter(weight_t)
-        self.proj_bias_kv = Parameter(bias_t)
 
         self.proj_weight_kv.requires_grad = self.k_proj.weight.requires_grad
-        self.proj_bias_kv.requires_grad = self.k_proj.bias.requires_grad
 
         del self.k_proj
         del self.v_proj
@@ -88,11 +78,12 @@ class WhisperCrossAttention(WhisperAttention):
             past_key_value=None,
             attention_mask: Optional[torch.Tensor] = None,
             cu_seqlens=None, max_len=None,
-            lang=None, atb=None,
+            cu_seqlens_kv=None, max_len_kv=None,
             incremental=False, incremental_cache=None,
             **kwargs,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
         """
+
         Args:
             hidden_states:
             key_value_states:
@@ -100,8 +91,8 @@ class WhisperCrossAttention(WhisperAttention):
             attention_mask:
             cu_seqlens:
             max_len:
-            lang:
-            atb:
+            cu_seqlens_kv:
+            max_len_kv:
             incremental:
             incremental_cache:
             **kwargs:
@@ -109,7 +100,6 @@ class WhisperCrossAttention(WhisperAttention):
         Returns:
 
         """
-
         if not self.fast_attention:
             raise NotImplementedError("Slow attention by HuggingFace is deprecated.")
 
@@ -121,37 +111,47 @@ class WhisperCrossAttention(WhisperAttention):
             recompute = False
             key_value_states = key_value_states
 
-            # TODO: Add factorize
-
             # attention_mask should have size Bxlen_k
             low_precision = True
 
             attn_output, coverage = encdec_attn_bias_func(recompute, self.training, self.num_heads,
                                                           hidden_states, key_value_states,
                                                           in_proj_weight_q, in_proj_weight_kv, out_proj_weight,
-                                                          self.q_proj.bias, self.proj_bias_kv, self.out_proj.bias,
+                                                          self.q_proj.bias, None, self.out_proj.bias,
                                                           attention_mask, self.dropout,
                                                           incremental, incremental_cache,
                                                           False, None, None,  # no rotary encodings
                                                           low_precision, True)
 
         else:
-            recompute = False
-            key_value_states = key_value_states
+            assert self.fast_bert_mha is not None
+            assert cu_seqlens is not None
+            assert cu_seqlens_kv is not None
+            assert max_len is not None
+            assert max_len_kv is not None
+            assert incremental == False
+            assert incremental_cache is None
 
-            # TODO: Add factorize
+            total_bsz_q = hidden_states.size(0)
+            total_bsz_kv = key_value_states.size(0)
+            q = linear_function(hidden_states, in_proj_weight_q, self.q_proj.bias)
 
-            # attention_mask should have size Bxlen_k
-            low_precision = True
+            kv = linear_function(key_value_states, in_proj_weight_kv, None)
 
-            attn_output, coverage = encdec_attn_bias_func(recompute, self.training, self.num_heads,
-                                                          hidden_states, key_value_states,
-                                                          in_proj_weight_q, in_proj_weight_kv, out_proj_weight,
-                                                          self.q_proj.bias, self.proj_bias_kv, self.out_proj.bias,
-                                                          attention_mask, self.dropout,
-                                                          incremental, incremental_cache,
-                                                          False, None, None,  # no rotary encodings
-                                                          low_precision, True)
+            kv = kv.view(total_bsz_kv, self.num_heads, 2, self.head_dim).transpose(1, 2).contiguous()
+
+            q = q.view(total_bsz_q, self.num_heads, self.head_dim)
+
+            dropout_p = self.dropout if self.training else 0.0
+            causal = False
+            softmax_scale = 1.0 / math.sqrt(self.head_dim)
+            context = self.fast_bert_mha(q, kv, cu_seqlens, cu_seqlens_kv,
+                                         max_len, max_len_kv, dropout_p, softmax_scale, causal, False)
+
+            context = context.view(-1, self.num_heads * self.head_dim).contiguous()
+            attn_output = linear_function(context, out_proj_weight, self.out_proj.bias)
+
+            coverage = None
 
         return attn_output, coverage, incremental_cache
 
@@ -334,7 +334,6 @@ class WhisperDecoderLayer(nn.Module):
         if output_attentions:
             outputs += (self_attn_weights, cross_attn_weights)
 
-
         return outputs, incremental_cache
 
 
@@ -357,6 +356,8 @@ class WhisperDecoder(WhisperPreTrainedModel):
         self.max_source_positions = config.max_source_positions
         self.embed_scale = math.sqrt(config.d_model) if config.scale_embedding else 1.0
 
+        self.model_size = config.d_model
+
         self.embed_tokens = nn.Embedding(config.vocab_size, config.d_model, self.padding_idx)
         self.embed_positions = WhisperPositionalEmbedding(self.max_target_positions, config.d_model)
 
@@ -372,6 +373,12 @@ class WhisperDecoder(WhisperPreTrainedModel):
         # Initialize weights and apply final processing
         self.post_init()
 
+        # backward compat
+        self.switchout = 0
+
+        from onmt.modules.optimized.flash_mha import flash_bert_mha
+        self.fast_bert_mha = flash_bert_mha
+
     def get_input_embeddings(self):
         return self.embed_tokens
 
@@ -380,19 +387,6 @@ class WhisperDecoder(WhisperPreTrainedModel):
 
     def forward(
         self,
-        # input_ids=None,
-        # attention_mask=None,
-        # encoder_hidden_states=None,
-        # head_mask=None,
-        # cross_attn_head_mask=None,
-        # past_key_values=None,
-        # inputs_embeds=None,
-        # position_ids=None,
-        # use_cache=None,
-        # output_attentions=None,
-        # output_hidden_states=None,
-        # return_dict=None,
-        # cache_position=None,
         input_ids=None,
         attention_mask=None,
         encoder_hidden_states=None,
@@ -439,9 +433,6 @@ class WhisperDecoder(WhisperPreTrainedModel):
         past_key_values_length = 0
         position_ids = None
 
-        # if position_ids is None:
-        #     position_ids = cache_position.unsqueeze(0)
-
         # embed positions
         if input_ids is not None:
             positions = self.embed_positions(
@@ -463,14 +454,69 @@ class WhisperDecoder(WhisperPreTrainedModel):
         #     output_attentions,
         # )
         qlen = klen = hidden_states.size(1)
+        bsz = hidden_states.size(0)
+
+        assert bsz == encoder_hidden_states.size(1), (f"The batch size should be {encoder_hidden_states.size(1)} , "
+                                                      f"but it is {bsz}.")
 
         causal_mask = torch.triu(
             inputs_embeds.new_ones(qlen, klen), diagonal=1).bool()
+
+        padding_mask = attention_mask
 
         # decoder layers
         all_hidden_states = () if output_hidden_states else None
         all_self_attns = () if output_attentions else None
         all_cross_attentions = () if (output_attentions and encoder_hidden_states is not None) else None
+
+        # transpose to have TxBxH
+        # TODO: flash attention
+
+        is_autocast = torch.is_autocast_enabled()
+        autocast_dtype = torch.get_autocast_gpu_dtype()
+        # print(is_autocast, autocast_dtype)
+
+        if self.fast_bert_mha and is_autocast and (autocast_dtype == torch.float16 or autocast_dtype == torch.bfloat16):
+            can_run_fast_bert_mha = True
+
+            # lets unpad both hidden_states and context states
+            if padding_mask is None:
+                padding_mask = input_ids.new_zeros(bsz, qlen)
+            padding_mask = padding_mask.contiguous().long()
+            lengths = (1 - padding_mask).sum(dim=1)
+            lengths = lengths.cpu().tolist()  # list of lengths for B seqs
+            hidden_states = hidden_states.view(-1, hidden_states.size(-1))
+            non_pad_indices = torch.nonzero(padding_mask.view(-1).ne(1)).squeeze(1)
+            hidden_states = hidden_states.index_select(0, non_pad_indices)
+            max_len = max(lengths)
+            # cumulative sequence lengths (required input for fmha)
+            a = torch.tensor(np.array([0] + lengths), dtype=torch.int32)
+            cu_seqlens = torch.cumsum(a, 0).to(dtype=torch.int32, device=hidden_states.device)
+
+            # unpad the context
+            encoder_hidden_states = encoder_hidden_states.transpose(0, 1).contiguous()
+            context_len = encoder_hidden_states.size(1)
+
+            lengths = [context_len] * bsz
+
+            encoder_hidden_states = encoder_hidden_states.view(-1, encoder_hidden_states.size(-1))
+
+            max_len_kv = max(lengths)
+            # cumulative sequence lengths (required input for fmha)
+            a = torch.tensor(np.array([0] + lengths), dtype=torch.int32)
+            cu_seqlens_kv = torch.cumsum(a, 0).to(dtype=torch.int32, device=encoder_hidden_states.device)
+
+        else:
+            max_len, cu_seqlens = None, None
+            max_len_kv, cu_seqlens_kv = None, None
+            non_pad_indices = None
+            can_run_fast_bert_mha = False
+
+            hidden_states = hidden_states.transpose(0, 1).contiguous()
+
+        if can_run_fast_bert_mha:
+            assert hidden_states.ndim == 2
+            assert encoder_hidden_states.ndim == 2
 
         for idx, decoder_layer in enumerate(self.layers):
             # add LayerDrop (see https://arxiv.org/abs/1909.11556 for description)
@@ -496,11 +542,16 @@ class WhisperDecoder(WhisperPreTrainedModel):
             #         cache_position,
             #     )
             # else:
-            layer_outputs = decoder_layer(
+            # print('[INFO] Decoder layer %d ' % idx, hidden_states.size())
+
+            # we return the outputs and the cache
+            layer_outputs, _ = decoder_layer(
                 hidden_states,
                 attention_mask=causal_mask,
                 encoder_hidden_states=encoder_hidden_states,
                 output_attentions=output_attentions,
+                max_len=max_len, cu_seqlens=cu_seqlens,
+                max_len_kv=max_len_kv, cu_seqlens_kv=cu_seqlens_kv
             )
             hidden_states = layer_outputs[0]
 
@@ -512,6 +563,12 @@ class WhisperDecoder(WhisperPreTrainedModel):
 
         hidden_states = self.layer_norm(hidden_states)
         # add hidden states from the last decoder layer
+
+        if can_run_fast_bert_mha:
+            seq_len = qlen
+            hidden_states = index_copy(hidden_states, non_pad_indices, bsz * seq_len)
+            hidden_states = hidden_states.view(bsz, seq_len, -1).transpose(0, 1).contiguous()
+
         if output_hidden_states:
             all_hidden_states += (hidden_states,)
 
