@@ -620,8 +620,6 @@ class WhisperEncoder(WhisperPreTrainedModel):
         with torch.no_grad():
             input_features = input_features.narrow(2, 1, feature_size - 1)
 
-        # print("[INFO] Encoder input: ", input_features.size())
-
         expected_seq_length = self.config.max_source_positions * self.conv1.stride[0] * self.conv2.stride[0]
         if input_features.shape[1] != expected_seq_length:
             raise ValueError(
@@ -635,7 +633,7 @@ class WhisperEncoder(WhisperPreTrainedModel):
             output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
         )
         # B x T x H -> B x H x T (for convolution)
-        input_features = input_features.transpose(1, 2)
+        input_features = input_features.transpose(1, 2).contiguous()
 
         inputs_embeds = nn.functional.gelu(self.conv1(input_features))
         inputs_embeds = nn.functional.gelu(self.conv2(inputs_embeds))
@@ -660,7 +658,11 @@ class WhisperEncoder(WhisperPreTrainedModel):
         autocast_dtype = torch.get_autocast_gpu_dtype()
         # print(is_autocast, autocast_dtype)
 
-        if self.fast_bert_mha and is_autocast and (autocast_dtype == torch.float16 or autocast_dtype == torch.bfloat16):
+        condition_1 = self.fast_bert_mha and is_autocast and (autocast_dtype == torch.float16 or autocast_dtype == torch.bfloat16)
+
+        condition_2 = self.fast_bert_mha and (hidden_states.dtype == torch.float16 or hidden_states.dtype == torch.bfloat16)
+
+        if condition_1 or condition_2:
             can_run_fast_bert_mha = True
 
             # whisper doesn't use padding mask, so the list of length is simple

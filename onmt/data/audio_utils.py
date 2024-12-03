@@ -485,3 +485,35 @@ def safe_readaudio_from_cache(file_, wav_path, start=0.0, end=0.0, sample_rate=1
     # tensor has size [length, num_channel] in which channel should be 1 for wav2vec
 
     return tensor
+
+from .whisper_audio import WhisperAudioProcessor
+class AudioReader(object):
+
+    def __init__(self, format="wav", num_mel_bin=1, wav_processor="torch"):
+
+        self.format = format
+        self.num_mel_bin = num_mel_bin
+        self.processor_type = wav_processor
+
+        if 'whisper' in self.processor_type:
+
+            audio_processor = WhisperAudioProcessor(self.processor_type)
+
+        else:
+            audio_processor = None
+
+        self.processor = audio_processor
+
+    def __call__(self, wav_path, start, end, sample_rate=16000):
+
+        data = safe_readaudio(wav_path, start=start, end=end, sample_rate=sample_rate)
+
+        if self.num_mel_bin > 0:
+            if self.processor_type in ['torch', 'fairseq']:
+                data = wav_to_fmel(data, num_mel_bin=self.num_mel_bin)
+            elif 'whisper' in self.processor_type:
+                data = self.processor.extract_feature(data.sum(1), sampling_rate=sample_rate)
+            else:
+                raise NotImplementedError
+
+        return data

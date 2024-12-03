@@ -12,15 +12,16 @@ class Generator(nn.Module):
         super(Generator, self).__init__()
         self.hidden_size = hidden_size
         self.output_size = output_size
-        self.linear = nn.Linear(hidden_size, output_size)
+        self.linear = nn.Linear(hidden_size, output_size, bias=bias)
         self.fix_norm = fix_norm
         self.must_softmax = False
         
         stdv = 1. / math.sqrt(self.linear.weight.size(1))
         
         torch.nn.init.uniform_(self.linear.weight, -stdv, stdv)
-        
-        self.linear.bias.data.zero_()
+
+        if bias:
+            self.linear.bias.data.zero_()
 
     def forward(self, output_dicts):
         """

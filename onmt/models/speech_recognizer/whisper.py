@@ -67,16 +67,7 @@ class WhisperModel(Wav2vecTransformer):
 
         src = batch.get('source')
         tgt = batch.get('target_input')
-        tgt_pos = batch.get('target_pos')
-        src_lang = batch.get('source_lang')
-        tgt_lang = batch.get('target_lang')
-        src_atb = batch.get('source_atbs')
-        tgt_atb = batch.get('target_atbs')
-        src_lengths = batch.src_lengths
-        tgt_lengths = batch.tgt_lengths
 
-        org_src = src
-        org_tgt = tgt
         src = src.transpose(0, 1)  # transpose to have batch first
         tgt = tgt.transpose(0, 1)
 
@@ -85,33 +76,24 @@ class WhisperModel(Wav2vecTransformer):
         # step 1: extract the actual data and then forward encoder
 
         # during training mixture is always None
-        encoder_output = self.encoder(src,
-                                      batch_first_output=batch_first_output,
-                                      output_attentions=False)
+        # encoder_output = self.encoder(src,
+        #                               batch_first_output=batch_first_output,
+        #                               output_attentions=False)
+        encoder_output = self.encoder(src)
 
         context = encoder_output[0]
         src_attention_mask = None
         tgt_attention_mask = None
 
-        # decoder_outputs = self.decoder(input_ids=tgt,
-        #                                attention_mask=tgt_attention_mask,
-        #                                encoder_hidden_states=context,
-        #                                encoder_attention_mask=src_attention_mask,
-        #                                sub_encoder_hidden_states=None,
-        #                                sub_encoder_attention_mask=None,
-        #                                lang=tgt_lang, atb=tgt_atb,
-        #                                src_lang=_src_lang,
-        #                                checkpointing_ffn=checkpointing_ffn,
-        #                                checkpointing_cross_attn=checkpointing_cross_attn,
-        #                                checkpointing_self_attn=checkpointing_self_attn)
-
+        # tgt_attention_mask = torch.logical_not(batch.get('target_input_selfattn_mask'))
         tgt_attention_mask = batch.get('target_input_selfattn_mask')
 
         decoder_outputs = self.decoder( input_ids=tgt,
                                         attention_mask=tgt_attention_mask,
                                         encoder_hidden_states=context)
 
-        decoder_output = decoder_outputs[0]
+        # B x T x H -> T x B x H
+        # decoder_output = decoder_outputs[0].transpose(0, 1).contiguous()
         # contrastive_loss = decoder_outputs[-1]
 
         output_dict = defaultdict(lambda: None)
@@ -125,5 +107,64 @@ class WhisperModel(Wav2vecTransformer):
         output_dict['logprobs'] = logprobs
 
         return output_dict
+
+    def create_decoder_state(self, batch, beam_size=1, type=2, buffering=True,
+                             pretrained_layer_states=None, **kwargs):
+        """
+        Generate a new decoder state based on the batch input
+        :param pretrained_layer_states:
+        :param buffering:
+        :param type:
+        :param batch: Batch object (may not contain target during decoding)
+        :param beam_size: Size of beam used in beam search
+        :return:
+        """
+        src = batch.get('source')
+        tgt_lang = batch.get('target_lang')
+        src_lang = batch.get('source_lang')
+
+        src_transposed = src.transpose(0, 1)  # transpose -> batch first
+
+        batch_first_output = False
+        encoder_output = self.encoder(src_transposed)
+
+        context = encoder_output[0]
+        src_mask = src_transposed  # B x T x H but we don't really need it
+
+        print("[INFO] create Transformer decoding state with buffering", buffering)
+        decoder_state = TransformerDecodingState(src, tgt_lang, context, src_lang,
+                                                 beam_size=beam_size, model_size=self.model_size,
+                                                 type=2, buffering=buffering, src_mask=src_mask)
+
+        return decoder_state
+
+    def step(self, input_t, decoder_state, streaming=False):
+        """
+        Decoding function:
+        generate new decoder output based on the current input and current decoder state
+        the decoder state is updated in the process
+        :param streaming:
+        :param input_t: the input word index at time t
+        :param decoder_state: object DecoderState containing the buffers required for decoding
+        :return: a dictionary containing: log-prob output and the attention coverage
+        """
+
+        # print(input_t[0].tolist())
+
+        output_dict = self.decoder.step(input_t, decoder_state, streaming=streaming)
+        output_dict['src'] = decoder_state.src.transpose(0, 1)
+
+        log_prob = self.generator[0](output_dict)['logits'].squeeze(0)
+        log_prob = torch.nn.functional.log_softmax(log_prob, dim=-1, dtype=torch.float32)
+
+        coverage = output_dict['coverage']
+        last_coverage = coverage[:, -1, :].squeeze(1)
+
+        output_dict['log_prob'] = log_prob
+        output_dict['coverage'] = last_coverage
+
+        return output_dict
+
+
 
     #TODO: create decoding state

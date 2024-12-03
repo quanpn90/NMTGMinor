@@ -1,5 +1,6 @@
 import math
 from typing import Optional, Tuple, Union
+from collections import defaultdict
 
 import numpy as np
 import torch
@@ -356,7 +357,7 @@ class WhisperDecoder(WhisperPreTrainedModel):
         self.max_source_positions = config.max_source_positions
         self.embed_scale = math.sqrt(config.d_model) if config.scale_embedding else 1.0
 
-        self.model_size = config.d_model
+
 
         self.embed_tokens = nn.Embedding(config.vocab_size, config.d_model, self.padding_idx)
         self.embed_positions = WhisperPositionalEmbedding(self.max_target_positions, config.d_model)
@@ -374,6 +375,7 @@ class WhisperDecoder(WhisperPreTrainedModel):
         self.post_init()
 
         # backward compat
+        self.model_size = config.d_model
         self.switchout = 0
 
         from onmt.modules.optimized.flash_mha import flash_bert_mha
@@ -426,7 +428,6 @@ class WhisperDecoder(WhisperPreTrainedModel):
             input_shape = inputs_embeds.size()[:-1]
         else:
             raise ValueError("You have to specify either decoder_input_ids or decoder_inputs_embeds")
-
         if inputs_embeds is None:
             inputs_embeds = self.embed_tokens(input_ids)
 
@@ -580,9 +581,128 @@ class WhisperDecoder(WhisperPreTrainedModel):
 
     def step(self, input, decoder_state, **kwargs):
 
-        raise NotImplementedError
+        # context is stored in the decoder state in [T B H] format
+        encoder_hidden_states = decoder_state.context
 
-        return
+        buffers = decoder_state.attention_buffers
+        buffering = decoder_state.buffering
+
+        input_ids = input
+        time_step = input.size(1)
+
+        # print(input_ids.size())
+
+        # retrieve input_ids and inputs_embeds
+        input_shape = input_ids.size()
+
+        # print(input_ids[0].tolist())
+        inputs_embeds = self.embed_tokens(input_ids)
+
+        past_key_values_length = 0
+        position_ids = None
+
+        # embed positions
+        if input_ids is not None:
+            positions = self.embed_positions(
+                input_ids, past_key_values_length=past_key_values_length, position_ids=position_ids
+            )
+        else:
+            positions = self.embed_positions(
+                inputs_embeds, past_key_values_length=past_key_values_length, position_ids=position_ids
+            )
+
+        hidden_states = inputs_embeds + positions.to(inputs_embeds.device)
+        hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
+
+        qlen = klen = hidden_states.size(1)
+        bsz = hidden_states.size(0)
+
+        assert bsz == encoder_hidden_states.size(1), (f"The batch size should be {encoder_hidden_states.size(1)} , "
+                                                      f"but it is {bsz}.")
+
+        causal_mask = torch.triu(
+            inputs_embeds.new_ones(qlen, klen), diagonal=1).bool()
+
+        padding_mask = None
+
+        # is_autocast = torch.is_autocast_enabled()
+        # autocast_dtype = torch.get_autocast_gpu_dtype()
+        # # print(is_autocast, autocast_dtype)
+        #
+        # if (self.fast_bert_mha and is_autocast and
+        #         (autocast_dtype == torch.float16 or autocast_dtype == torch.bfloat16)):
+        if self.fast_bert_mha and (hidden_states.dtype == torch.float16 or hidden_states.dtype == torch.bfloat16):
+            can_run_fast_bert_mha = True
+
+            # lets unpad both hidden_states and context states
+            # if padding_mask is None:
+            #     padding_mask = input_ids.new_zeros(bsz, qlen)
+            # padding_mask = padding_mask.contiguous().long()
+            # lengths = (1 - padding_mask).sum(dim=1)
+            # lengths = lengths.cpu().tolist()  # list of lengths for B seqs
+            lengths = [qlen] * bsz
+            hidden_states = hidden_states.view(-1, hidden_states.size(-1))
+            max_len = max(lengths)
+            # cumulative sequence lengths (required input for fmha)
+            a = torch.tensor(np.array([0] + lengths), dtype=torch.int32)
+            cu_seqlens = torch.cumsum(a, 0).to(dtype=torch.int32, device=hidden_states.device)
+
+            # unpad the context
+            encoder_hidden_states = encoder_hidden_states.transpose(0, 1).contiguous()
+            context_len = encoder_hidden_states.size(1)
+
+            lengths = [context_len] * bsz
+
+            encoder_hidden_states = encoder_hidden_states.view(-1, encoder_hidden_states.size(-1))
+
+            max_len_kv = max(lengths)
+            # cumulative sequence lengths (required input for fmha)
+            a = torch.tensor(np.array([0] + lengths), dtype=torch.int32)
+            cu_seqlens_kv = torch.cumsum(a, 0).to(dtype=torch.int32, device=encoder_hidden_states.device)
+
+        else:
+            max_len, cu_seqlens = None, None
+            max_len_kv, cu_seqlens_kv = None, None
+            non_pad_indices = None
+            can_run_fast_bert_mha = False
+
+            hidden_states = hidden_states.transpose(0, 1).contiguous()
+
+        # print(can_run_fast_bert_mha, hidden_states.size())
+
+        if can_run_fast_bert_mha:
+            assert hidden_states.ndim == 2
+            assert encoder_hidden_states.ndim == 2
+
+        for idx, decoder_layer in enumerate(self.layers):
+
+            # TODO: add buffer
+            layer_outputs, _ = decoder_layer(
+                hidden_states,
+                attention_mask=causal_mask,
+                encoder_hidden_states=encoder_hidden_states,
+                max_len=max_len, cu_seqlens=cu_seqlens,
+                max_len_kv=max_len_kv, cu_seqlens_kv=cu_seqlens_kv
+            )
+            hidden_states = layer_outputs[0]
+
+        hidden_states = self.layer_norm(hidden_states)
+
+        if can_run_fast_bert_mha:
+            hidden_states = hidden_states.view(bsz, qlen, -1).transpose(0, 1).contiguous()
+
+        # take the output for the final step
+        output = hidden_states[-1].unsqueeze(0)
+
+        # temporary coverage
+        coverage = hidden_states.new(hidden_states.size(1), 1, encoder_hidden_states.size(0)).zero_()
+
+        output_dict = defaultdict(lambda: None)
+        output_dict['hidden'] = output
+        output_dict['coverage'] = coverage
+        output_dict['context'] = encoder_hidden_states
+
+        return output_dict
 
     # Copied from transformers.models.llama.modeling_llama.LlamaModel._update_causal_mask
     # def _update_causal_mask(

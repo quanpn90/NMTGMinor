@@ -324,6 +324,14 @@ class FastTranslator(Translator):
                                                                                    src_lang="en_XX")
                 self.tgt_external_tokenizer.src_lang = opt.tgt_lang
 
+        elif 'whisper' in opt.external_tokenizer.lower():
+
+            from transformers import WhisperTokenizerFast
+            ext_tokenizer = WhisperTokenizerFast.from_pretrained(opt.external_tokenizer)
+            ext_tokenizer.set_prefix_tokens(language=opt.tgt_lang, task="transcribe")
+
+            self.tgt_external_tokenizer = ext_tokenizer
+
         else:
             self.external_tokenizer = None
             self.tgt_external_tokenizer = None
@@ -380,7 +388,6 @@ class FastTranslator(Translator):
         if self.opt.cuda:
             self.filter = self.filter.cuda()
 
-    # TODO: function incompleted
     def predict_language(self, batches):
 
         model = self.models[0]
@@ -451,8 +458,16 @@ class FastTranslator(Translator):
         scores_buf = scores.clone()
         tokens = src.new(bsz * beam_size, max_len + 2).long().fill_(self.tgt_pad)
         tokens_buf = tokens.clone()
-        tokens[:, 0].fill_(self.tgt_bos)  # first token is
-        # tokens[:, 1].fill_(self.tgt_bos)  # first token is bos
+
+        whisper = True
+        if not whisper:
+            tokens[:, 0].fill_(self.tgt_bos)  # first token is bos
+        else:
+            tokens[:, 0].fill_(50258)
+            tokens[:, 1].fill_(50265)
+            tokens[:, 2].fill_(50360)
+            tokens[:, 3].fill_(50364)
+
         attn, attn_buf = None, None
         nonpad_idxs = None
         src_tokens = src.transpose(0, 1)  # batch x time
@@ -537,8 +552,9 @@ class FastTranslator(Translator):
             # clone relevant token and attention tensors
             tokens_clone = tokens.index_select(0, bbsz_idx)
             tokens_clone = tokens_clone[:, 1:step + 2]  # skip the first index, which is EOS
-            assert not tokens_clone.eq(self.tgt_eos).any()
+            # assert not tokens_clone.eq(self.tgt_eos).any()
             tokens_clone[:, step] = self.tgt_eos
+
             attn_clone = attn.index_select(0, bbsz_idx)[:, :, 1:step + 2] if attn is not None else None
 
             # compute scores per token position
@@ -594,6 +610,7 @@ class FastTranslator(Translator):
                 if not finished[sent] and is_finished(sent, step, unfin_idx):
                     finished[sent] = True
                     newly_finished.append(unfin_idx)
+
             return newly_finished
 
         reorder_state = None
@@ -641,6 +658,10 @@ class FastTranslator(Translator):
         else:
             step = 0
 
+        if whisper:
+            step = 3
+
+
         # step = 0 if (prefix_tokens is None and bsz == 1) else prefix_tokens.size(1) - 1
         # for step in range(max_len + 1):  # one extra step for EOS marker
         while step < (max_len + 1):
@@ -659,6 +680,7 @@ class FastTranslator(Translator):
 
             # decode_input is the sequence from 0 to step
             decode_input = tokens[:, :step + 1]
+            # print(step, decode_input)
             lprobs, avg_attn_scores = self._decode(decode_input, decoder_states,
                                                    sub_decoder_states=sub_decoder_states)
 
@@ -675,7 +697,9 @@ class FastTranslator(Translator):
                 # n_tokens_masked = _mask.sum().item()
                 # print("number of masked tokens: ", n_tokens_masked)
                 lprobs.masked_fill_(_mask.bool().unsqueeze(0), -math.inf)
-            lprobs[:, self.tgt_pad] = -math.inf  # never select pad
+
+            if not whisper:
+                lprobs[:, self.tgt_pad] = -math.inf  # never select pad
 
             # handle min and max length constraints
 
@@ -844,6 +868,8 @@ class FastTranslator(Translator):
             cand_bbsz_idx = cand_beams.add(bbsz_offsets)
 
             # finalize hypotheses that end in eos (except for blacklisted ones)
+
+            # print(step, cand_indices)
             eos_mask = cand_indices.eq(self.tgt_eos)
             eos_mask[:, :beam_size][blacklist] = 0
 
@@ -978,6 +1004,8 @@ class FastTranslator(Translator):
         # sort by score descending
         for sent in range(len(finalized)):
             finalized[sent] = sorted(finalized[sent], key=lambda r: r['score'], reverse=True)
+
+        print(finalized)
 
         return finalized, gold_scores, gold_words, allgold_scores
 

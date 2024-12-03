@@ -288,7 +288,14 @@ class NMTLossFunc(CrossEntropyLossBase):
             loss_weights = None
 
         targets_ = targets.view(-1)
-        non_pad_mask = torch.nonzero(targets_.ne(self.padding_idx)).squeeze(1)
+
+        # select the positions that are not masked
+        pad_mask = model_outputs['tgt_mask']
+        non_pad_mask = torch.logical_not(pad_mask).contiguous().view(-1)
+        non_pad_mask = torch.nonzero(non_pad_mask).squeeze(1)
+
+        # remove the masked positions
+        # if we do it before final linear, we could save some more memory
         labels = targets_.index_select(0, non_pad_mask)
         logits = logits.view(-1, logits.size(-1)).index_select(0, non_pad_mask)
 

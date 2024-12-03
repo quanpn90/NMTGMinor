@@ -158,6 +158,9 @@ parser.add_argument('-external_tokenizer', default="",
 
 parser.add_argument('-num_mel_bin', type=int, default=0,
                     help="The number of log mel features if positive")
+parser.add_argument('-wav_processor', default="torch", type=str,
+                        help="The waveform processor: either 'torch' or 'whisper")
+
 parser.add_argument('-language_restriction', default=[], nargs='+', type=str,
                         help="Use CUDA on the listed devices.")
 # arguments added by Christian
@@ -498,9 +501,10 @@ def main():
             if prefix is not None and prefix_reader is not None:
                 prefix = []
 
-    # Text processing for MT
+    # wav processing: wav2vec, w2v-bert, whisper
     elif opt.asr_format == 'wav':
         from onmt.data.audio_utils import safe_readaudio, wav_to_fmel
+        from onmt.data.audio_utils import AudioReader
 
         past_audio_data = open(opt.past_src) if opt.past_src else None
         past_src_batches = list()
@@ -519,6 +523,8 @@ def main():
         sub_src = open(opt.sub_src) if opt.sub_src else None
         sub_src_batch = list()
 
+        audio_reader = AudioReader(format=opt.asr_format, num_mel_bin=opt.num_mel_bin, wav_processor=opt.wav_processor)
+
         while True:
             try:
                 line = next(audio_data).strip().split()
@@ -529,9 +535,8 @@ def main():
                     end = 0
                 else:
                     wav_path, start, end = line[1], float(line[2]), float(line[3])
-                line = safe_readaudio(wav_path, start=start, end=end, sample_rate=16000)
-                if opt.num_mel_bin > 1:
-                    line = wav_to_fmel(line, num_mel_bin=opt.num_mel_bin)
+
+                line = audio_reader(wav_path, start, end, sample_rate=16000)
 
                 if past_audio_data:
                     past_line = next(past_audio_data).strip().split()
@@ -541,9 +546,8 @@ def main():
                         end = 0
                     else:
                         wav_path, start, end = past_line[1], float(past_line[2]), float(past_line[3])
-                    past_line = safe_readaudio(wav_path, start=start, end=end, sample_rate=16000)
-                    if opt.num_mel_bin > 1:
-                        past_line = wav_to_fmel(past_line, num_mel_bin=opt.num_mel_bin)
+
+                    past_line = audio_reader(wav_path, start, end, sample_rate=16000)
                 else:
                     past_line = None
 
