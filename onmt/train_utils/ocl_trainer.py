@@ -59,6 +59,13 @@ def human_format(num):
     return '{}{}'.format('{:f}'.format(num).rstrip('0').rstrip('.'),
                          ['', 'K', 'M', 'B', 'T'][magnitude])
 
+# def store_ema_weights(model):
+#
+# def ema_weights(model, encoder_alpha=0.1, decoder_alpha=0.1):
+#
+#     encoder = model.module.encoder
+#
+#     encoder_weights
 
 def prepare_sample(batch, device=None, reservoir=None, dataset_id=None):
     """
@@ -478,12 +485,13 @@ class OCLTrainer(object):
         else:
             self.fisher_info = None
 
-        self.print("[INFO] Creating Reservoir ...")
+
 
         # TODO: add option for reservoir size
 
         reservoir_size = opt.reservoir_size // self.world_size
         if reservoir_size > 0:
+            self.print("[INFO] Creating Reservoir ...")
             self.reservoir = Reservoir(max_samples=reservoir_size,
                                        update_method="reservoir_sampling",
                                        unit="sample",
@@ -638,7 +646,7 @@ class OCLTrainer(object):
             torch.save(checkpoint, file_name)
 
             # check the save directory here
-            checkpoint_dir = os.path.dirname(opt.save_model) 
+            checkpoint_dir = os.path.dirname(opt.save_model)
             existed_save_files = checkpoint_paths(checkpoint_dir)
             for save_file in existed_save_files[opt.keep_save_files:]:
                 print(" * Deleting old save file %s ...." % save_file)
@@ -647,7 +655,7 @@ class OCLTrainer(object):
     def eval(self, data):
 
         self.print("[INFO] Running cross-entropy evaluation...", flush=True)
-        opt = self.opt 
+        opt = self.opt
 
         rank = self.rank
         world_size = self.world_size
@@ -690,7 +698,7 @@ class OCLTrainer(object):
                         with autocast(enabled=opt.fp16, dtype=torch.bfloat16 if self.bf16_ready else torch.float16):
                             batch = prepare_sample(samples, device=self.device)
                             targets = batch.get('target_output')
-                            tgt_mask = targets.ne(onmt.constants.PAD)
+                            tgt_mask = batch.get('tgt_selfattn_mask')
 
                             outputs = self.model(batch, streaming=opt.streaming, target_mask=tgt_mask,
                                                  mirror=opt.mirror_loss, streaming_state=streaming_state,
@@ -754,6 +762,7 @@ class OCLTrainer(object):
         opt = self.opt
         streaming = False
         grad_norm = -1
+        ema = self.opt.ema
 
         # Clear the gradients of the model
         self.optim.zero_grad(set_to_none=not opt.true_zero_grad)
@@ -995,11 +1004,6 @@ class OCLTrainer(object):
                             else:
                                 rec_loss_data = None
 
-                            if hasattr(opt, "use_memory") and opt.use_memory and "loss_memory" in outputs:
-                                loss_memory = outputs['loss_memory']
-                                #full_loss = full_loss + loss_memory
-                                full_loss = loss_memory
-
                             if opt.contrastive_loss_coeff > 0 and 'contrastive_loss' in outputs:
                                 contrastive_loss = outputs['contrastive_loss']
                                 full_loss = full_loss + opt.contrastive_loss_coeff * contrastive_loss
@@ -1029,22 +1033,6 @@ class OCLTrainer(object):
 
                         # continue
                         raise e
-                        # recovering mechanism doesn't work at the moment
-                        # loss = 0
-                        # for p in self.model.parameters():
-                        #     if p.grad is not None:
-                        #         del p.grad  # free some memory
-                        #     loss = loss + p.sum() * 0
-
-                        # torch.cuda.empty_cache()
-                        #
-                        # if opt.streaming:  # reset stream in this case ...
-                        #     streaming_state = self.model.init_stream()
-                        #
-                        #
-                        # # backward to actually free the graph
-                        # # self.grad_scaler.scale(loss).backward()
-                        # oom.add_(1)
 
                     raise e
 
@@ -1121,11 +1109,40 @@ class OCLTrainer(object):
                                 report_ewc_loss.add_(ewc_loss)
                                 report_ewc_count += 1
 
+                    if ema:
+                        cur_model = self.model.module if self.world_size > 1 else self.model
+                        encoder_weights = cur_model.encoder.state_dict()
+                        decoder_weights = cur_model.decoder.state_dict()
+                    else:
+                        encoder_weights, decoder_weights = None, None
+
                     if self.grad_scaler is not None:
+
+
                         self.optim.step(scaler=self.grad_scaler)
                         self.grad_scaler.update()
                     else:
                         self.optim.step(scaler=None)
+
+                    if ema:
+                        # print("[INFO] Exponential Moving Averaging weights ...")
+                        cur_model = self.model.module if self.world_size > 1 else self.model
+                        new_encoder_weights = cur_model.encoder.state_dict()
+                        new_decoder_weights = cur_model.decoder.state_dict()
+
+                        # TODO: compute the alphas
+                        encoder_alpha = 0.0001
+                        decoder_alpha = 0.0001
+                        for key in new_encoder_weights.keys():
+
+                            new_encoder_weights[key] = new_encoder_weights[key] * encoder_alpha + (1 - encoder_alpha) * encoder_weights[key]
+
+                        for key in new_decoder_weights.keys():
+                            new_decoder_weights[key] = new_decoder_weights[key] * decoder_alpha + (1 - decoder_alpha) * decoder_weights[key]
+
+                        cur_model.encoder.load_state_dict(new_encoder_weights)
+                        cur_model.decoder.load_state_dict(new_decoder_weights)
+
                     self.optim.zero_grad(set_to_none=True if self.opt.fsdp else not opt.true_zero_grad)
                     counter = 0
                     num_accumulated_words.zero_()
@@ -1143,11 +1160,6 @@ class OCLTrainer(object):
                         ep = float(epoch) - 1. + ((float(i) + 1.) / n_samples)
                         if opt.save_metrics in ['ppl', 'perplexity']:
                             value = valid_ppl
-                        elif opt.save_metrics == "memory":
-                            if isinstance(self.model, torch.nn.parallel.DistributedDataParallel):
-                                value = self.model.module.choose_best_epoch_by
-                            else:
-                                value = self.model.choose_best_epoch_by
                         else:
                             value = 1-valid_accuracy
                         self.save(ep, value,
@@ -1164,9 +1176,6 @@ class OCLTrainer(object):
                 total_loss.add_(loss_data)
                 total_words.add_(num_words)
                 report_sents.add_(1)
-                # total_tokens += batch.get('target_output').nelement()
-                # total_non_pads += batch.get('target_output').ne(onmt.constants.PAD).sum().item()
-                # batch_efficiency = total_non_pads / total_tokens
 
                 if opt.reconstruct:
                     report_rec_loss.add_(rec_loss_data)
@@ -1202,12 +1211,7 @@ class OCLTrainer(object):
 
                     if self.is_main():
 
-                        if ctc_only:
-                            log_string = ("Epoch %2d, Rd %d, %5d/%5d; ; grad_norm: %6.4f " %
-                                          (epoch, dataset_id, i + 1, len(_data_iterator),
-                                           grad_norm))
-                        else:
-                            log_string = ("Ep %2d, Rd %d, %5d/%5d; ; ppl: %6.2f ; grad_norm: %6.4f " %
+                        log_string = ("Ep %2d, Rd %d, %5d/%5d; ; ppl: %6.2f ; grad_norm: %6.4f " %
                                           (epoch, dataset_id, i + 1, len(_data_iterator),
                                            math.exp(report_loss.item() / report_tgt_words.item()),
                                            grad_norm))
@@ -1297,11 +1301,6 @@ class OCLTrainer(object):
             self.print('[INFO] Validation accuracy: %g percent' % (100 * valid_accuracy))
             if opt.save_metrics in ['ppl', 'perplexity']:
                 value = valid_ppl
-            elif opt.save_metrics == "memory":
-                if isinstance(self.model, torch.nn.parallel.DistributedDataParallel):
-                    value = self.model.module.choose_best_epoch_by
-                else:
-                    value = self.model.choose_best_epoch_by
             else:
                 value = 1 - valid_accuracy
             self.save(epoch, dataset_id, value)

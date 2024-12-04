@@ -10,6 +10,9 @@ def make_parser(parser):
     parser.add_argument('-data_cache_size', type=int, default=32,
                         help="""Caching for dataset (if implemented)""")
 
+    parser.add_argument('-ema', action="store_true",
+                        help="""Use Exponential Moving Average (EMA) weights during training""")
+
     parser.add_argument('-multi_dataset', action='store_true',
                         help='Reading multiple datasets (sharing the same dictionary)')
     parser.add_argument('-concat_dataset', action='store_true',
@@ -353,8 +356,7 @@ def make_parser(parser):
                         help='Macaron style network with 2 FFN per block.')
     parser.add_argument('-fused_ffn', action="store_true",
                         help="""Fast feedforward""")
-    parser.add_argument('-favor_attention', action="store_true",
-                        help="""Use Favor+ Attention for faster self-attention""")
+
 
     # for FUSION
     parser.add_argument('-lm_checkpoint', default='', type=str,
@@ -648,6 +650,8 @@ def make_parser(parser):
 
     parser.add_argument('-num_mel_bin', type=int, default=0,
                         help='Number of log mel bins for feature extraction. 0 = use waveforms ')
+    parser.add_argument('-wav_processor', default="torch", type=str,
+                        help="The waveform processor: either 'torch' or 'whisper")
 
 
     return parser
