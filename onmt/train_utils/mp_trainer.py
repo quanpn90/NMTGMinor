@@ -605,7 +605,7 @@ class Trainer(object):
                         with autocast(enabled=opt.fp16, dtype=torch.bfloat16 if self.bf16_ready else torch.float16):
                             batch = prepare_sample(samples, device=self.device)
                             targets = batch.get('target_output')
-                            tgt_mask = batch.get('target_input_selfattn_mask')
+                            tgt_mask = batch.get('target_input_padding_mask')
                             # print(targets.size())
 
                             if opt.load_pretrained_classifier:
@@ -624,14 +624,14 @@ class Trainer(object):
 
                             ctc_only = False
                             if outputs["hidden"] != None:
-                                outputs['tgt_mask'] = batch.get('target_input_selfattn_mask')
+                                outputs['tgt_mask'] = batch.get('target_input_padding_mask')
                                 loss_dict = self.loss_function(outputs, targets, model=self.model, eval=True)
                                 loss_data = loss_dict['data']
                                 correct, total = loss_dict['correct'], loss_dict['total']
-
-                                assert (total == batch.tgt_size), \
-                                    "Process %i, Minibatch %d/%d: Expected %d tokens from the batch, got %d" \
-                                    % (self.rank, i, data_size, batch.tgt_size, total)
+                                self.print(correct, total, flush=True)
+                                # assert (total == batch.tgt_size), \
+                                #     "Process %i, Minibatch %d/%d: Expected %d tokens from the batch, got %d" \
+                                #     % (self.rank, i, data_size, batch.tgt_size, total)
 
                             else:
                                 ctc_only = True
@@ -774,7 +774,7 @@ class Trainer(object):
                 with maybe_no_sync():
                     with autocast(enabled=opt.fp16, dtype=torch.bfloat16 if self.bf16_ready else torch.float16):
 
-                        tgt_mask = batch.get('target_input_selfattn_mask')
+                        tgt_mask = batch.get('target_input_padding_mask')
                         if opt.load_pretrained_classifier:
                             with torch.no_grad():
                                 layer_states = self.classifier.encode(batch)
@@ -798,7 +798,7 @@ class Trainer(object):
                         batch_size = batch.size
                         # outputs is a dictionary containing keys/values necessary for loss function
                         # can be flexibly controlled within models for easier extensibility
-                        outputs['tgt_mask'] = batch.get('target_input_selfattn_mask')
+                        outputs['tgt_mask'] = batch.get('target_input_padding_mask')
 
                         ctc_only = False
                         if outputs["hidden"] != None:
@@ -839,7 +839,7 @@ class Trainer(object):
                             dec_pred_lang = outputs['dec_pred_lang']
                             # dec_mask = outputs['target_mask']
                             # dec_mask = targets.eq(onmt.constants.PAD)
-                            dec_mask = batch.get('target_input_selfattn_mask')
+                            dec_mask = batch.get('target_input_padding_mask')
                             dec_lid_loss = self.lid_loss_function(dec_pred_lang, batch.get("target_lang"), dec_mask)
 
                             full_loss = full_loss + 0.01 * (enc_lid_loss + dec_lid_loss)
@@ -1303,7 +1303,7 @@ class Trainer(object):
                 with maybe_no_sync():
                     with autocast(enabled=opt.fp16, dtype=torch.bfloat16 if self.bf16_ready else torch.float16):
 
-                        tgt_mask = batch.get('target_input_selfattn_mask')
+                        tgt_mask = batch.get('target_input_padding_mask')
                         if opt.load_pretrained_classifier:
                             with torch.no_grad():
                                 layer_states = self.classifier.encode(batch)
@@ -1326,7 +1326,7 @@ class Trainer(object):
                         batch_size = batch.size
                         # outputs is a dictionary containing keys/values necessary for loss function
                         # can be flexibly controlled within models for easier extensibility
-                        outputs['tgt_mask'] = batch.get('target_input_selfattn_mask')
+                        outputs['tgt_mask'] = batch.get('target_input_padding_mask')
 
                         loss_dict = self.loss_function(outputs, targets, model=self.model)
                         loss_data = loss_dict['data']

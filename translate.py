@@ -252,6 +252,7 @@ def main():
     pred_score_total, pred_words_total, gold_score_total, gold_words_total = 0, 0, 0, 0
 
     src_batches = []
+    src_lengths = []
     src_batch, tgt_batch, past_src_batch = [], [], []
 
     count = 0
@@ -517,6 +518,7 @@ def main():
 
         for j in range(n_models):
             src_batches.append(list())  # We assign different inputs for each model in the ensemble
+            src_lengths.append(list())
             if past_audio_data:
                 past_src_batches.append(list())
 
@@ -536,7 +538,7 @@ def main():
                 else:
                     wav_path, start, end = line[1], float(line[2]), float(line[3])
 
-                line = audio_reader(wav_path, start, end, sample_rate=16000)
+                line, src_length = audio_reader(wav_path, start, end, sample_rate=16000)
 
                 if past_audio_data:
                     past_line = next(past_audio_data).strip().split()
@@ -547,7 +549,7 @@ def main():
                     else:
                         wav_path, start, end = past_line[1], float(past_line[2]), float(past_line[3])
 
-                    past_line = audio_reader(wav_path, start, end, sample_rate=16000)
+                    past_line, _ = audio_reader(wav_path, start, end, sample_rate=16000)
                 else:
                     past_line = None
 
@@ -555,13 +557,13 @@ def main():
                 break
 
             original_line = line
-            src_length = line.size(0)
+            actual_length = line.size(0)
 
             """
             Handling different concatenation size for different models, to make ensembling possible
             """
 
-            if _is_oversized(src_batches[0], src_length, opt.batch_size):
+            if _is_oversized(src_batches[0], actual_length, opt.batch_size):
                 # If adding a new sentence will make the batch oversized
                 # Then do translation now, and then free the list
                 if past_audio_data:
@@ -571,7 +573,11 @@ def main():
                     print("Batch sizes :", len(src_batches[0]), len(tgt_batch), len(sub_src_batch))
                 pred_batch, pred_ids, pred_score, pred_pos_scores, pred_length, \
                 gold_score, num_gold_words, all_gold_scores = translator.translate(
-                    src_batches, tgt_batch, sub_src_data=sub_src_batch, past_src_data=past_src_batches, type='asr',
+                    src_batches, tgt_batch,
+                    src_lengths=src_lengths,
+                    sub_src_data=sub_src_batch,
+                    past_src_data=past_src_batches,
+                    type='asr',
                     prefix=prefix, anti_prefix=anti_prefix,
                     memory=memory, input_size=max(1, opt.num_mel_bin),
                     language_restriction=opt.language_restriction)
@@ -591,15 +597,17 @@ def main():
                 src_batch, tgt_batch, sub_src_batch = [], [], []
                 for j, _ in enumerate(src_batches):
                     src_batches[j] = []
+                    src_lengths[j] = []
                     if past_audio_data: past_src_batches[j] = []
                 if prefix is not None and prefix_reader is not None:
                     prefix = []
 
             # handling different concatenation settings (for example 4|1|4)
             for j in range(n_models):
-
                 src_batches[j].append(line)
-                if past_audio_data: past_src_batches[j].append(past_line)
+                src_lengths[j].append(src_length)
+                if past_audio_data:
+                    past_src_batches[j].append(past_line)
 
             if tgtF:
                 # ~ tgt_tokens = tgtF.readline().split() if tgtF else None
@@ -643,6 +651,7 @@ def main():
             gold_score, num_gold_words, all_gold_scores = translator.translate(
                 src_batches,
                 tgt_batch,
+                src_lengths=src_lengths,
                 past_src_data=past_src_batches,
                 sub_src_data=sub_src_batch, type='asr',
                 prefix=prefix,
@@ -665,6 +674,7 @@ def main():
             src_batch, tgt_batch = [], []
             for j, _ in enumerate(src_batches):
                 src_batches[j] = []
+                src_lengths[j] = []
                 if past_audio_data: past_src_batches[j] = []
             if prefix is not None and prefix_reader is not None:
                 prefix = []

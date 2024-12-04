@@ -864,6 +864,7 @@ class FastTranslator(Translator):
 
             # cand_bbsz_idx contains beam indices for the top candidate
             # hypotheses, with a range of values: [0, bsz*beam_size),
+            # hypotheses, with a range of values: [0, bsz*beam_size),
             # and dimensions: [bsz, cand_size]
             cand_bbsz_idx = cand_beams.add(bbsz_offsets)
 
@@ -1120,10 +1121,12 @@ class FastTranslator(Translator):
         return anti_prefix
 
     # override the "build_data" from parent Translator
-    def build_data(self, src_sents, tgt_sents, type='mt', past_sents=None, input_size=1):
+    def build_data(self, src_sents, tgt_sents,
+                   src_lengths=None,
+                   type='mt', past_sents=None, input_size=1):
         # This needs to be the same as preprocess.py.
         data_type = 'text'
-
+        pre_padded = False
         if type == 'mt':
 
             if self.external_tokenizer is None:
@@ -1160,13 +1163,15 @@ class FastTranslator(Translator):
                 else:
                     past_src_data = None
 
-        elif type == 'asr':
-            # no need to deal with this
-            src_data = src_sents
-            past_src_data = past_sents
-            data_type = 'audio'
-        elif type == 'asr_wav':
-            src_data = src_sents
+        elif type == 'asr_wav' or type == 'asr':
+            src_data = list()
+            pre_padded=False
+            if src_lengths is not None and len(src_lengths) > 0:
+                assert len(src_lengths) == len(src_sents)
+                src_data = list(zip(src_sents, src_lengths))
+                pre_padded = True
+
+                print(src_data[0][1])
             past_src_data = past_sents
             data_type = 'wav'
         else:
@@ -1227,7 +1232,9 @@ class FastTranslator(Translator):
                             batch_size_sents=sys.maxsize,
                             src_align_right=self.opt.src_align_right,
                             past_src_data=past_src_data,
-                            input_size=input_size)
+                            input_size=input_size,
+                            pre_padded=pre_padded,
+                            src_sizes=src_lengths)
 
     def get_restriction_ids(self, language_restriction):
 
@@ -1241,7 +1248,9 @@ class FastTranslator(Translator):
 
         return restriction_ids
 
-    def translate(self, src_data, tgt_data, past_src_data=None, sub_src_data=None, type='mt',
+    def translate(self, src_data, tgt_data,
+                  src_lengths=None,
+                  past_src_data=None, sub_src_data=None, type='mt',
                   prefix=None, anti_prefix=None,
                   memory=None, input_size=1,
                   language_restriction=[]):
@@ -1257,7 +1266,9 @@ class FastTranslator(Translator):
                     past_src_data_ = past_src_data[i]
                 else:
                     past_src_data_ = None
-                dataset = self.build_data(src_data_, tgt_data, type=type, past_sents=past_src_data_,
+                dataset = self.build_data(src_data_, tgt_data,
+                                          src_lengths[i],
+                                          type=type, past_sents=past_src_data_,
                                           input_size=input_size)
                 batch = dataset.get_batch(0)
                 batches.append(batch)
@@ -1265,12 +1276,16 @@ class FastTranslator(Translator):
         # we check if the source data is a list of list (multiple sources for ensembling)
         elif isinstance(src_data[0], list) and len(src_data[0]) > 0 and isinstance(src_data[0][0], list):
             src_data = src_data[0]
-            dataset = self.build_data(src_data, tgt_data, type=type, past_sents=past_src_data, input_size=input_size)
+            dataset = self.build_data(src_data, tgt_data,
+                                      src_lengths[0],
+                                      type=type, past_sents=past_src_data, input_size=input_size)
             batch = dataset.get_batch(0)  # this dataset has only one mini-batch
             batches = [batch] * self.n_models
             src_data = [src_data] * self.n_models
         else:
-            dataset = self.build_data(src_data, tgt_data, type=type, past_sents=past_src_data, input_size=input_size)
+            dataset = self.build_data(src_data, tgt_data,
+                                      src_lengths,
+                                      type=type, past_sents=past_src_data, input_size=input_size)
             batch = dataset.get_batch(0)  # this dataset has only one mini-batch
             batches = [batch] * self.n_models
             src_data = [src_data] * self.n_models

@@ -495,16 +495,18 @@ class WhisperDecoder(WhisperPreTrainedModel):
             cu_seqlens = torch.cumsum(a, 0).to(dtype=torch.int32, device=hidden_states.device)
 
             # unpad the context
+            encoder_attention_mask = encoder_attention_mask.contiguous().long()
+            lengths_kv = (1 - encoder_attention_mask).sum(dim=1)
+            lengths_kv = lengths_kv.cpu().tolist()  # list of lengths for B seqs
+            non_pad_indices_kv = torch.nonzero(encoder_attention_mask.view(-1).ne(1)).squeeze(1)
+
             encoder_hidden_states = encoder_hidden_states.transpose(0, 1).contiguous()
-            context_len = encoder_hidden_states.size(1)
-
-            lengths = [context_len] * bsz
-
             encoder_hidden_states = encoder_hidden_states.view(-1, encoder_hidden_states.size(-1))
+            encoder_hidden_states = encoder_hidden_states.index_select(0, non_pad_indices_kv)
 
-            max_len_kv = max(lengths)
+            max_len_kv = max(lengths_kv)
             # cumulative sequence lengths (required input for fmha)
-            a = torch.tensor(np.array([0] + lengths), dtype=torch.int32)
+            a = torch.tensor(np.array([0] + lengths_kv), dtype=torch.int32)
             cu_seqlens_kv = torch.cumsum(a, 0).to(dtype=torch.int32, device=encoder_hidden_states.device)
 
         else:
@@ -550,6 +552,7 @@ class WhisperDecoder(WhisperPreTrainedModel):
                 hidden_states,
                 attention_mask=causal_mask,
                 encoder_hidden_states=encoder_hidden_states,
+                encoder_attention_mask=encoder_attention_mask,
                 output_attentions=output_attentions,
                 max_len=max_len, cu_seqlens=cu_seqlens,
                 max_len_kv=max_len_kv, cu_seqlens_kv=cu_seqlens_kv
@@ -583,6 +586,7 @@ class WhisperDecoder(WhisperPreTrainedModel):
 
         # context is stored in the decoder state in [T B H] format
         encoder_hidden_states = decoder_state.context
+        encoder_attention_mask = decoder_state.src_mask
 
         buffers = decoder_state.attention_buffers
         buffering = decoder_state.buffering
@@ -623,14 +627,6 @@ class WhisperDecoder(WhisperPreTrainedModel):
         causal_mask = torch.triu(
             inputs_embeds.new_ones(qlen, klen), diagonal=1).bool()
 
-        padding_mask = None
-
-        # is_autocast = torch.is_autocast_enabled()
-        # autocast_dtype = torch.get_autocast_gpu_dtype()
-        # # print(is_autocast, autocast_dtype)
-        #
-        # if (self.fast_bert_mha and is_autocast and
-        #         (autocast_dtype == torch.float16 or autocast_dtype == torch.bfloat16)):
         if self.fast_bert_mha and (hidden_states.dtype == torch.float16 or hidden_states.dtype == torch.bfloat16):
             can_run_fast_bert_mha = True
 
@@ -648,16 +644,18 @@ class WhisperDecoder(WhisperPreTrainedModel):
             cu_seqlens = torch.cumsum(a, 0).to(dtype=torch.int32, device=hidden_states.device)
 
             # unpad the context
+            encoder_attention_mask = encoder_attention_mask.contiguous().long()
+            lengths_kv = (1 - encoder_attention_mask).sum(dim=1)
+            lengths_kv = lengths_kv.cpu().tolist()  # list of lengths for B seqs
+            non_pad_indices_kv = torch.nonzero(encoder_attention_mask.view(-1).ne(1)).squeeze(1)
+
             encoder_hidden_states = encoder_hidden_states.transpose(0, 1).contiguous()
-            context_len = encoder_hidden_states.size(1)
-
-            lengths = [context_len] * bsz
-
             encoder_hidden_states = encoder_hidden_states.view(-1, encoder_hidden_states.size(-1))
+            encoder_hidden_states = encoder_hidden_states.index_select(0, non_pad_indices_kv)
 
-            max_len_kv = max(lengths)
+            max_len_kv = max(lengths_kv)
             # cumulative sequence lengths (required input for fmha)
-            a = torch.tensor(np.array([0] + lengths), dtype=torch.int32)
+            a = torch.tensor(np.array([0] + lengths_kv), dtype=torch.int32)
             cu_seqlens_kv = torch.cumsum(a, 0).to(dtype=torch.int32, device=encoder_hidden_states.device)
 
         else:
@@ -667,8 +665,6 @@ class WhisperDecoder(WhisperPreTrainedModel):
             can_run_fast_bert_mha = False
 
             hidden_states = hidden_states.transpose(0, 1).contiguous()
-
-        # print(can_run_fast_bert_mha, hidden_states.size())
 
         if can_run_fast_bert_mha:
             assert hidden_states.ndim == 2
@@ -681,6 +677,7 @@ class WhisperDecoder(WhisperPreTrainedModel):
                 hidden_states,
                 attention_mask=causal_mask,
                 encoder_hidden_states=encoder_hidden_states,
+                encoder_attention_mask=encoder_attention_mask,
                 max_len=max_len, cu_seqlens=cu_seqlens,
                 max_len_kv=max_len_kv, cu_seqlens_kv=cu_seqlens_kv
             )

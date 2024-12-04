@@ -511,9 +511,12 @@ class AudioReader(object):
         if self.num_mel_bin > 0:
             if self.processor_type in ['torch', 'fairseq']:
                 data = wav_to_fmel(data, num_mel_bin=self.num_mel_bin)
+                length = data.size(0)
             elif 'whisper' in self.processor_type:
-                data = self.processor.extract_feature(data.sum(1), sampling_rate=sample_rate)
+                data, length = self.processor.extract_feature(data.sum(1), sampling_rate=sample_rate)
             else:
                 raise NotImplementedError
+        else:
+            length = data.size(0)
 
-        return data
+        return data, length

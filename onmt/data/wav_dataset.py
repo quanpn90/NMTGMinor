@@ -146,12 +146,14 @@ class WavDataset(torch.utils.data.Dataset):
                 data = old_data
 
         # extract fmel features AFTER spec augmentation
+        pre_padded = False
         if self.num_mel_bin > 0:
 
             if self.processor_type in ['torch', 'fairseq']:
                 data = wav_to_fmel(data, num_mel_bin=self.num_mel_bin)
             elif 'whisper' in self.processor_type:
                 data = self.processor.extract_feature(data.sum(1), sampling_rate=sample_rate)
+                pre_padded = True
             else:
                 raise NotImplementedError
 

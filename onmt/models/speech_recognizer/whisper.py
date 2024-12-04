@@ -67,6 +67,7 @@ class WhisperModel(Wav2vecTransformer):
 
         src = batch.get('source')
         tgt = batch.get('target_input')
+        src_mask = batch.get('src_padding_mask')
 
         src = src.transpose(0, 1)  # transpose to have batch first
         tgt = tgt.transpose(0, 1)
@@ -79,22 +80,23 @@ class WhisperModel(Wav2vecTransformer):
         # encoder_output = self.encoder(src,
         #                               batch_first_output=batch_first_output,
         #                               output_attentions=False)
-        encoder_output = self.encoder(src)
+        encoder_output = self.encoder(src, src_mask)
 
         context = encoder_output[0]
-        src_attention_mask = None
-        tgt_attention_mask = None
+        context_padding_mask = encoder_output[-1]
 
         # tgt_attention_mask = torch.logical_not(batch.get('target_input_selfattn_mask'))
-        tgt_attention_mask = batch.get('target_input_selfattn_mask')
+        tgt_attention_mask = batch.get('target_input_padding_mask')
 
         decoder_outputs = self.decoder( input_ids=tgt,
                                         attention_mask=tgt_attention_mask,
-                                        encoder_hidden_states=context)
+                                        encoder_hidden_states=context,
+                                        encoder_attention_mask=context_padding_mask)
 
         # B x T x H -> T x B x H
         # decoder_output = decoder_outputs[0].transpose(0, 1).contiguous()
         # contrastive_loss = decoder_outputs[-1]
+        decoder_output = decoder_outputs[0]
 
         output_dict = defaultdict(lambda: None)
 
@@ -120,16 +122,17 @@ class WhisperModel(Wav2vecTransformer):
         :return:
         """
         src = batch.get('source')
+        src_mask = batch.get('src_padding_mask')
         tgt_lang = batch.get('target_lang')
         src_lang = batch.get('source_lang')
 
         src_transposed = src.transpose(0, 1)  # transpose -> batch first
 
         batch_first_output = False
-        encoder_output = self.encoder(src_transposed)
+        encoder_output = self.encoder(src_transposed, src_mask)
 
         context = encoder_output[0]
-        src_mask = src_transposed  # B x T x H but we don't really need it
+        src_mask = encoder_output[1]  # B x T x H but we don't really need it
 
         print("[INFO] create Transformer decoding state with buffering", buffering)
         decoder_state = TransformerDecodingState(src, tgt_lang, context, src_lang,

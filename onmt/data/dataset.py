@@ -128,20 +128,28 @@ def merge_concat_data(data, type="text", src_pad=0, tgt_pad=0,
 
 @torch.no_grad()
 def merge_data(data, align_right=False, type='text', augmenter=None, upsampling=False,
-               feature_size=40, dataname="source", src_pad=1, tgt_pad=1, reverse=False):
+               feature_size=40, dataname="source",
+               src_pad=1,
+               tgt_pad=1,
+               reverse=False,
+               lengths=None):
     """
     Assembling the individual sequences into one single tensor, included padding
-    :param tgt_pad:
-    :param src_pad:
-    :param dataname:
-    :param feature_size:
-    :param upsampling:
-    :param data: the list of sequences
-    :param align_right: aligning the sequences w.r.t padding
-    :param type: text or audio
-    :param augmenter: for augmentation in audio models
-    :param reverse: reverse the order of data
-    :return:
+    Args:
+        data:
+        align_right:
+        type:
+        augmenter:
+        upsampling:
+        feature_size:
+        dataname:
+        src_pad:
+        tgt_pad:
+        reverse:
+        lengths:
+
+    Returns:
+
     """
 
     # initialize with batch_size * length
@@ -162,6 +170,8 @@ def merge_data(data, align_right=False, type='text', augmenter=None, upsampling=
             raise NotImplementedError
         pos = None
 
+        padding_mask = data[0].new(len(data), max_length).bool().fill_(True)
+
         for i in range(len(data)):
             data_length = data[i].size(0)
             _data = torch.flip(data[i], [0]) if reverse else data[i]
@@ -169,7 +179,9 @@ def merge_data(data, align_right=False, type='text', augmenter=None, upsampling=
             offset = max_length - data_length if align_right else 0
             tensor[i].narrow(0, offset, data_length).copy_(_data)
 
-        return tensor, pos, lengths
+            padding_mask[i].narrow(0, offset, data_length).fill_(False)
+
+        return tensor, padding_mask, lengths
 
     elif type in ["audio", "scp"]:
 
@@ -200,7 +212,8 @@ def merge_data(data, align_right=False, type='text', augmenter=None, upsampling=
         batch_size = len(data)
 
         # feature size + 1 because the last dimension is created for padding
-        tensor = data[0].float().new(batch_size, max_length, feature_size + 1).fill_(0)
+        tensor = data[0].float().new(batch_size, max_length, feature_size).fill_(0)
+        padding_mask = data[0].new(len(data), max_length).bool().fill_(True)
 
         for i in range(len(samples)):
             sample = samples[i]
@@ -208,37 +221,49 @@ def merge_data(data, align_right=False, type='text', augmenter=None, upsampling=
             data_length = sample.size(0)
             offset = max_length - data_length if align_right else 0
 
-            tensor[i].narrow(0, offset, data_length).narrow(1, 1, sample.size(1)).copy_(sample)
+            tensor[i].narrow(0, offset, data_length).copy_(sample)
             # in padding dimension: 1 is not padded, 0 is padded
-            tensor[i].narrow(0, offset, data_length).narrow(1, 0, 1).fill_(1)
 
-        return tensor, None, lengths
+            padding_mask[i].narrow(0, offset, data_length).fill_(False)
+
+        return tensor, padding_mask, lengths
 
     elif type == 'wav':
         samples = data
-        lengths = [x.size(0) for x in samples]
-        max_length = max(lengths)
+
+        # for some situations, the input is pre-padded which means the actual length (computed from data)
+        # can't be used for padding
+        actual_lengths = [x.size(0) for x in samples]
+
+        if lengths is None:
+            lengths = actual_lengths
+        max_length = max(actual_lengths)
         # allocate data for the batch speech
         # feature_size = 1  # samples[0].size(1)  # most likely 1
         # assert feature_size == 1, "expecting feature size = 1 but get %2.f" % feature_size
         batch_size = len(data)
 
-        # feature size + 1 because the last dimension is created for padding
-        tensor = data[0].float().new(batch_size, max_length, feature_size + 1).fill_(0)
+        tensor = data[0].float().new(batch_size, max_length, feature_size).fill_(0)
+
+        padding_mask = data[0].new(batch_size, max_length).bool().fill_(True)
 
         for i in range(len(samples)):
             sample = samples[i]
 
             # normalize
-            data_length = sample.size(0)
+            data_length = lengths[i]
+            actual_length = actual_lengths[i]
             offset = max_length - data_length if align_right else 0
 
-            channels = sample.size(1)
-            tensor[i].narrow(0, offset, data_length).narrow(1, 1, channels).copy_(sample)
-            # in padding dimension: 1 is not padded, 0 is padded
-            tensor[i].narrow(0, offset, data_length).narrow(1, 0, 1).fill_(1)
+            # always pad to the right
+            # note: the data is filled by the actual length
+            tensor[i].narrow(0, offset, actual_length).copy_(sample)
 
-        return tensor, None, lengths
+            # in padding dimension: 1 is not padded, 0 is padded
+            # print(padding_mask.size(), data_length)
+            padding_mask[i].narrow(0, offset, data_length).fill_(False)
+
+        return tensor, padding_mask, lengths
 
     else:
         raise NotImplementedError
@@ -369,34 +394,31 @@ def collate_fn(src_data, tgt_data,
                src_features=None, deterministic=False,
                use_char_level=False, char_data=None,
                create_reverse=False,
-               index_data=None):
+               index_data=None,
+               src_lengths=None):
 
     tensors = dict()
     if src_data is not None:
-        tensors['source'], tensors['source_pos'], src_lengths = merge_data(src_data, align_right=src_align_right,
+        tensors['source'], tensors['src_padding_mask'], src_lengths = merge_data(src_data, align_right=src_align_right,
                                                                            type=src_type, augmenter=augmenter,
                                                                            upsampling=upsampling, feature_size=feature_size,
-                                                                           dataname="source", src_pad=src_pad)
+                                                                           dataname="source", src_pad=src_pad,
+                                                                           lengths=src_lengths)
         tensors['src_type'] = src_type
-        tensors['src_selfattn_mask'] = tensors['source'].eq(src_pad)
         tensors['source'] = tensors['source'].transpose(0, 1).contiguous()
-        if tensors['source_pos'] is not None:
-            tensors['source_pos'] = tensors['source_pos'].transpose(0, 1)
         tensors['src_lengths'] = torch.LongTensor(src_lengths)
         tensors['src_size'] = sum(src_lengths)
 
     if tgt_data is not None:
-        target_full, target_pos, tgt_lengths = merge_data(tgt_data, align_right=tgt_align_right,
-                                                              dataname="target", tgt_pad=tgt_pad)
+        target_full, tgt_padding_mask, tgt_lengths = merge_data(tgt_data, align_right=tgt_align_right,
+                                                                dataname="target", tgt_pad=tgt_pad)
 
-        tensors['tgt_selfattn_mask'] = target_full.eq(tgt_pad)
+        tensors['tgt_padding_mask'] = tgt_padding_mask
         target_full = target_full.t().contiguous()  # transpose BxT to TxB
         tensors['target'] = target_full
         tensors['target_input'] = target_full[:-1]
-        tensors['target_input_selfattn_mask'] = tensors['target_input'].transpose(0, 1).eq(tgt_pad)
+        tensors['target_input_padding_mask'] = tensors['tgt_padding_mask'][:, :-1]
         tensors['target_output'] = target_full[1:]
-        if target_pos is not None:
-            tensors['target_pos'] = target_pos.t().contiguous()[:-1]
         tgt_size = sum([len(x) - 1 for x in tgt_data])
         tensors['tgt_lengths'] = tgt_lengths
 
@@ -415,20 +437,21 @@ def collate_fn(src_data, tgt_data,
 
     # merge data for the previous source
     if past_src_data is not None:
-        tensors['past_source'], tensors['past_source_pos'], past_src_lengths = merge_data(past_src_data,
-                                                                                          align_right=src_align_right,
-                                                                                          type=src_type,
-                                                                                          augmenter=augmenter,
-                                                                                          upsampling=upsampling,
-                                                                                          feature_size=feature_size,
-                                                                                          dataname="source",
-                                                                                          src_pad=src_pad)
-
-        tensors['past_source'] = tensors['past_source'].transpose(0, 1).contiguous()
-        if tensors['past_source_pos'] is not None:
-            tensors['past_source_pos'] = tensors['past_source_pos'].transpose(0, 1)
-        tensors['past_src_lengths'] = torch.LongTensor(past_src_lengths)
-        tensors['past_src_size'] = sum(past_src_lengths)
+        raise NotImplementedError
+        # tensors['past_source'], tensors['past_source_pos'], past_src_lengths = merge_data(past_src_data,
+        #                                                                                   align_right=src_align_right,
+        #                                                                                   type=src_type,
+        #                                                                                   augmenter=augmenter,
+        #                                                                                   upsampling=upsampling,
+        #                                                                                   feature_size=feature_size,
+        #                                                                                   dataname="source",
+        #                                                                                   src_pad=src_pad)
+        #
+        # tensors['past_source'] = tensors['past_source'].transpose(0, 1).contiguous()
+        # if tensors['past_source_pos'] is not None:
+        #     tensors['past_source_pos'] = tensors['past_source_pos'].transpose(0, 1)
+        # tensors['past_src_lengths'] = torch.LongTensor(past_src_lengths)
+        # tensors['past_src_size'] = sum(past_src_lengths)
 
     tensors['tgt_size'] = tgt_size
     tensors['size'] = len(src_data) if src_data is not None else len(tgt_data)
@@ -751,6 +774,7 @@ class Dataset(torch.utils.data.Dataset):
                  char_data=None,
                  create_reverse=False,
                  device=0,
+                 pre_padded=False,
                  **kwargs):
         """
         :param src_data: List of tensors for the source side (1D for text, 2 or 3Ds for other modalities)
@@ -809,6 +833,7 @@ class Dataset(torch.utils.data.Dataset):
         self.use_char_level = use_char_level
         self.char_data = char_data
         self.create_reverse = create_reverse
+        self.pre_padded = pre_padded
 
         cut_off_size = kwargs.get('cut_off_size', 200000)
         smallest_batch_size = kwargs.get('smallest_batch_size', 4)
@@ -1093,8 +1118,21 @@ class Dataset(torch.utils.data.Dataset):
         assert index < self.num_batches, "%d > %d" % (index, self.num_batches)
 
         batch_ids = self.batches[index]
+        src_lengths = None
         if self.src:
-            src_data = [self.src[i] for i in batch_ids]
+
+            if self.pre_padded:
+
+                src_data = list()
+                src_lengths = list()
+
+                for i in batch_ids:
+                    src_data.append(self.src[i][0])
+                    src_lengths.append(self.src[i][1])
+
+            else:
+                src_data = [self.src[i] for i in batch_ids]
+                src_lengths = None
         else:
             src_data = None
 
@@ -1142,7 +1180,8 @@ class Dataset(torch.utils.data.Dataset):
                                   feature_size=self.input_size,
                                   use_char_level=self.use_char_level,
                                   char_data=self.char_data,
-                                  create_reverse=self.create_reverse
+                                  create_reverse=self.create_reverse,
+                                  src_lengths=src_lengths
                                   ),
                        )
         return batch
@@ -1223,6 +1262,8 @@ class Dataset(torch.utils.data.Dataset):
 
         batches = list()
 
+        src_lengths = None
+
         for samples in sample_list:
 
             src_data, tgt_data = None, None
@@ -1231,7 +1272,13 @@ class Dataset(torch.utils.data.Dataset):
             past_src_data = None
 
             if self.src:
-                src_data = [sample['src'] for sample in samples]
+                if self.pre_padded:
+
+                    src_data = [sample['src'][0] for sample in samples]
+                    src_lengths = [sample['src'][1] for sample in samples]
+                else:
+                    src_data = [sample['src'] for sample in samples]
+                    src_lengths = None
 
             if self.tgt:
                 tgt_data = [sample['tgt'] for sample in samples]
@@ -1272,7 +1319,8 @@ class Dataset(torch.utils.data.Dataset):
                                feature_size=self.input_size,
                                use_char_level=self.use_char_level,
                                char_data=self.char_data,
-                               index_data=index_data
+                               index_data=index_data,
+                               src_lengths=src_lengths
                                )
 
             batches.append(batch)

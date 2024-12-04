@@ -25,16 +25,19 @@ class WhisperAudioProcessor:
 
         # sum(0) just in case there are multiple channels
         # maybe its not a good idea?
-        x = feature_extractor(a.sum(0), sampling_rate=sr)
+        x = feature_extractor(a.sum(0), sampling_rate=sr, return_attention_mask=True)
 
         x = x['input_features'][0]
+        attn_mask = x['attention_mask'][0]
         x = torch.from_numpy(x)
 
         # squeeze(0) to remove the batch dimension
         # transpose(0, 1) to make the channel dimension last
         x = x.squeeze(0).transpose(0, 1).contiguous()
 
-        return x
+        length = attn_mask.long().sum().item()
+
+        return x, length
 
     # TODO: spec augment applied here
     def extract_feature(self, x, sampling_rate=16000):
@@ -48,11 +51,12 @@ class WhisperAudioProcessor:
         Returns:
         """
 
-        x = self.feature_extractor(x, sampling_rate=sampling_rate)
-        x = x['input_features'][0]
-        x = torch.from_numpy(x)
+        feats = self.feature_extractor(x, sampling_rate=sampling_rate, return_attention_mask=True, return_tensors="pt")
+        x = feats['input_features'][0]
+        attn_mask = feats['attention_mask'][0]
 
         x = x.squeeze(0).transpose(0, 1).contiguous()
+        length = attn_mask.long().sum().item()
 
-        return x
+        return x, length
 

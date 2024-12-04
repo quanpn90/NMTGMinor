@@ -374,6 +374,7 @@ def main(gpu, opt):
                                       char_data=char_data,
                                       use_char_level=opt.char_ctc,
                                       create_reverse=(opt.mirror_loss > 0),
+                                      pre_padded=('whisper' in opt.wav_processor),
                                       device=gpu)
 
             dicts['tgt_pad'] = train_data.tgt_pad
@@ -455,6 +456,7 @@ def main(gpu, opt):
                                       char_data=char_data,
                                       use_char_level=opt.char_ctc,
                                       create_reverse=(opt.mirror_loss > 0),
+                                      pre_padded=('whisper' in opt.wav_processor),
                                       device=gpu)
 
             elapse = str(datetime.timedelta(seconds=int(time.time() - start)))
@@ -578,6 +580,7 @@ def main(gpu, opt):
                                           char_data=char_data,
                                           use_char_level=opt.char_ctc,
                                           create_reverse=(opt.mirror_loss > 0),
+                                          pre_padded=('whisper' in opt.wav_processor),
                                           device=gpu)
 
                 if c == 1:
@@ -656,6 +659,7 @@ def main(gpu, opt):
                                           char_data=char_data,
                                           use_char_level=opt.char_ctc,
                                           create_reverse=(opt.mirror_loss > 0),
+                                          pre_padded=('whisper' in opt.wav_processor),
                                           device=gpu)
 
                 valid_sets.append(valid_data)

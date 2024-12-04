@@ -28,6 +28,8 @@ from pretrain_module.activations import ACT2FN
 from onmt.modules.optimized.linear import linear_function, factorize_linear
 from onmt.modules.optimized.self_attention_func import self_attn_func, self_attn_compact_func
 
+from onmt.models.speech_recognizer.fairseq_wav2vec2.fairseq_modules import index_copy
+
 
 # TODO: copy the whisper code for Encoder and prepare for Decoder
 
@@ -596,6 +598,7 @@ class WhisperEncoder(WhisperPreTrainedModel):
     def forward(
             self,
             input_features,
+            padding_mask=None,
             batch_first_output=False,
             output_attentions=False,
             output_hidden_states=False,
@@ -604,21 +607,16 @@ class WhisperEncoder(WhisperPreTrainedModel):
         """
         Args:
             input_features:
-            attention_mask:
-            head_mask:
+            padding_mask:
+            batch_first_output:
             output_attentions:
             output_hidden_states:
-            return_dict:
 
         Returns:
 
         """
         feature_size = input_features.size(2)
-        assert feature_size == 129
-
-        # remove the padding dimension
-        with torch.no_grad():
-            input_features = input_features.narrow(2, 1, feature_size - 1)
+        assert feature_size == 128
 
         expected_seq_length = self.config.max_source_positions * self.conv1.stride[0] * self.conv2.stride[0]
         if input_features.shape[1] != expected_seq_length:
@@ -638,8 +636,33 @@ class WhisperEncoder(WhisperPreTrainedModel):
         inputs_embeds = nn.functional.gelu(self.conv1(input_features))
         inputs_embeds = nn.functional.gelu(self.conv2(inputs_embeds))
 
-        # B x H x T_ -> B x T_ x H
         inputs_embeds = inputs_embeds.permute(0, 2, 1).contiguous()
+        # print(inputs_embeds.size())
+
+        # now we have to recompute the length ...
+        with torch.no_grad():
+            input_lengths = (1 - padding_mask.long()).sum(-1)
+            # apply conv formula to get real output_lengths
+            output_lengths = self._get_feat_extract_output_lengths(input_lengths)
+
+            padding_mask = torch.zeros(
+                inputs_embeds.shape[:2], dtype=inputs_embeds.dtype, device=inputs_embeds.device
+            )
+
+            # print(input_lengths, output_lengths)
+
+            # these two operations makes sure that all values
+            # before the output lengths indices are attended to
+            padding_mask[
+                (
+                    torch.arange(padding_mask.shape[0], device=padding_mask.device),
+                    output_lengths - 1,
+                )
+            ] = 1
+            padding_mask = (1 - padding_mask.flip([-1]).cumsum(-1).flip([-1])).bool()
+
+        # B x H x T_ -> B x T_ x H
+
         embed_pos = self.embed_positions.weight
 
         hidden_states = inputs_embeds + embed_pos
@@ -658,20 +681,25 @@ class WhisperEncoder(WhisperPreTrainedModel):
         autocast_dtype = torch.get_autocast_gpu_dtype()
         # print(is_autocast, autocast_dtype)
 
-        condition_1 = self.fast_bert_mha and is_autocast and (autocast_dtype == torch.float16 or autocast_dtype == torch.bfloat16)
+        condition_1 = is_autocast and (autocast_dtype == torch.float16 or autocast_dtype == torch.bfloat16)
 
-        condition_2 = self.fast_bert_mha and (hidden_states.dtype == torch.float16 or hidden_states.dtype == torch.bfloat16)
+        condition_2 =  (hidden_states.dtype == torch.float16 or hidden_states.dtype == torch.bfloat16)
 
-        if condition_1 or condition_2:
+        if self.fast_bert_mha and (condition_1 or condition_2):
+            # print(hidden_states.size(), padding_mask.size())
             can_run_fast_bert_mha = True
 
-            # whisper doesn't use padding mask, so the list of length is simple
-            lengths = [seq_len] * bsz
+            padding_mask = padding_mask.contiguous().long()
+            lengths = (1 - padding_mask).sum(dim=1)
+            lengths = lengths.cpu().tolist()  # list of lengths for B seqs
+            non_pad_indices = torch.nonzero(padding_mask.view(-1).ne(1)).squeeze(1)
 
             # resize for 2D
             hidden_states = hidden_states.view(-1, hidden_states.size(-1)).contiguous()  # flatten [B x T]
 
-            max_len = lengths[0]
+            hidden_states = hidden_states.index_select(0, non_pad_indices)
+
+            max_len = max(lengths)
             # cumulative sequence lengths (required input for fmha)
             a = torch.tensor(np.array([0] + lengths), dtype=torch.int32)
             cu_seqlens = torch.cumsum(a, 0).to(dtype=torch.int32, device=hidden_states.device)
@@ -680,6 +708,7 @@ class WhisperEncoder(WhisperPreTrainedModel):
             can_run_fast_bert_mha = False
             max_len = -1
             cu_seqlens = None
+            non_pad_indices = None
             hidden_states = hidden_states.transpose(0, 1).contiguous()
 
         if can_run_fast_bert_mha:
@@ -726,6 +755,9 @@ class WhisperEncoder(WhisperPreTrainedModel):
         hidden_states = self.layer_norm(hidden_states)
 
         if can_run_fast_bert_mha:
+
+            hidden_states = index_copy(hidden_states, non_pad_indices, bsz * seq_len)
+
             hidden_states = hidden_states.view(bsz, seq_len, -1)
 
             if not batch_first_output:
@@ -741,4 +773,4 @@ class WhisperEncoder(WhisperPreTrainedModel):
 
         # print("[INFO] Encoder output: ", hidden_states.size())
 
-        return tuple(v for v in [hidden_states, encoder_states, all_attentions] if v is not None)
+        return tuple(v for v in [hidden_states, encoder_states, all_attentions, padding_mask] if v is not None)
