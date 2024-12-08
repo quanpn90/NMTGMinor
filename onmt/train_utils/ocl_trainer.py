@@ -496,6 +496,9 @@ class OCLTrainer(object):
 
         print("[INFO] Process %d ready." % self.rank, flush=True)
 
+        self.total_accumulated_src = zero_tensor()
+        self.total_accumulated_tgt = zero_tensor()
+
     def is_main(self):
         return self.rank == 0
 
@@ -754,6 +757,7 @@ class OCLTrainer(object):
         opt = self.opt
         streaming = False
         grad_norm = -1
+        ema = self.opt.ema
 
         # Clear the gradients of the model
         self.optim.zero_grad(set_to_none=not opt.true_zero_grad)
@@ -807,6 +811,8 @@ class OCLTrainer(object):
         num_accumulated_words = zero_tensor()
         num_accumulated_sents = zero_tensor()
         report_contrastive_loss = zero_tensor()
+
+        total_accumulated_src += batch.src_size
 
         ewc_importance = opt.ewc_importance
 
@@ -959,51 +965,12 @@ class OCLTrainer(object):
                                 rev_loss_data = None
                                 mirror_loss_data = 0
 
-                            if opt.predict_language > 0:
-                                enc_pred_lang = outputs['enc_pred_lang']
-                                enc_mask = outputs['src_mask']
-                                enc_lid_loss = self.lid_loss_function(enc_pred_lang,
-                                                                      batch.get("source_lang"), enc_mask)
 
-                                dec_pred_lang = outputs['dec_pred_lang']
-                                # dec_mask = outputs['target_mask']
-                                # dec_mask = targets.eq(onmt.constants.PAD)
-                                dec_mask = batch.get('target_input_selfattn_mask')
-                                dec_lid_loss = self.lid_loss_function(dec_pred_lang,
-                                                                      batch.get("target_lang"), dec_mask)
-
-                                full_loss = full_loss + 0.01 * (enc_lid_loss + dec_lid_loss)
-
-                                report_enc_lid_loss.add_(enc_lid_loss.item())
-                                report_enc_lid_count += enc_mask.ne(1).int().sum().item()
-
-                                report_dec_lid_loss.add_(dec_lid_loss.item())
-                                report_dec_lid_count += dec_mask.ne(1).int().sum().item()
-
-                            else:
-                                enc_lid_loss = None
-                                enc_lid_loss_data = None
-                                dec_lid_loss = None
-                                dec_lid_loss_data = None
-
-                            # reconstruction loss
-                            if opt.reconstruct:
-                                rec_loss = loss_dict['rec_loss']
-                                rec_loss = rec_loss
-                                full_loss = full_loss + rec_loss
-                                rec_loss_data = loss_dict['rec_loss_data']
-                            else:
-                                rec_loss_data = None
-
-                            if hasattr(opt, "use_memory") and opt.use_memory and "loss_memory" in outputs:
-                                loss_memory = outputs['loss_memory']
-                                #full_loss = full_loss + loss_memory
-                                full_loss = loss_memory
-
-                            if opt.contrastive_loss_coeff > 0 and 'contrastive_loss' in outputs:
-                                contrastive_loss = outputs['contrastive_loss']
-                                full_loss = full_loss + opt.contrastive_loss_coeff * contrastive_loss
-                                report_contrastive_loss.add_(contrastive_loss.item())
+                            enc_lid_loss = None
+                            enc_lid_loss_data = None
+                            dec_lid_loss = None
+                            dec_lid_loss_data = None
+                            rec_loss_data = None
 
                             # correct, total = loss_dict['correct'], loss_dict['total']
                             # optimizer = self.optim.optimizer
@@ -1066,6 +1033,9 @@ class OCLTrainer(object):
                 num_accumulated_words.add_(tgt_size)
                 num_accumulated_sents.add_(batch_size)
 
+                self.total_accumulated_src.add_(src_size)
+                self.total_accumulated_tgt.add_(tgt_size)
+
                 # We only update the parameters after getting gradients from n mini-batches
                 update_flag = reduce
 
@@ -1121,12 +1091,44 @@ class OCLTrainer(object):
                                 report_ewc_loss.add_(ewc_loss)
                                 report_ewc_count += 1
 
+                    if ema:
+                        cur_model = self.model.module if self.world_size > 1 else self.model
+                        encoder_weights = cur_model.encoder.state_dict()
+                        decoder_weights = cur_model.decoder.state_dict()
+                    else:
+                        encoder_weights, decoder_weights = None, None
+
                     if self.grad_scaler is not None:
                         self.optim.step(scaler=self.grad_scaler)
                         self.grad_scaler.update()
                     else:
                         self.optim.step(scaler=None)
                     self.optim.zero_grad(set_to_none=True if self.opt.fsdp else not opt.true_zero_grad)
+
+                    if ema:
+                        # print("[INFO] Exponential Moving Averaging weights ...")
+                        cur_model = self.model.module if self.world_size > 1 else self.model
+                        new_encoder_weights = cur_model.encoder.state_dict()
+                        new_decoder_weights = cur_model.decoder.state_dict()
+
+                        # TODO: compute the alphas
+                        encoder_alpha = 0.0001
+                        decoder_alpha = 0.0001
+
+
+
+                        # alpha is small so most of the weights focus on the previous weights
+                        for key in new_encoder_weights.keys():
+                            new_encoder_weights[key] = new_encoder_weights[key] * encoder_alpha + (1 - encoder_alpha) * \
+                                                       encoder_weights[key]
+
+                        for key in new_decoder_weights.keys():
+                            new_decoder_weights[key] = new_decoder_weights[key] * decoder_alpha + (1 - decoder_alpha) * \
+                                                       decoder_weights[key]
+
+                        cur_model.encoder.load_state_dict(new_encoder_weights)
+                        cur_model.decoder.load_state_dict(new_decoder_weights)
+
                     counter = 0
                     num_accumulated_words.zero_()
                     num_accumulated_sents.zero_()

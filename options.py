@@ -651,6 +651,9 @@ def make_parser(parser):
     parser.add_argument('-wav_processor', default="torch", type=str,
                         help="The waveform processor: either 'torch' or 'whisper")
 
+    parser.add_argument('-ema', action="store_true",
+                        help="""Use Exponential Moving Average (EMA) weights during training""")
+
 
     return parser
 
