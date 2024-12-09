@@ -1,6 +1,6 @@
 import argparse
 import torch
-from datasets import load_from_disk
+from datasets import load_from_disk, Audio
 from transformers import WhisperProcessor, WhisperForConditionalGeneration
 
 from transformers import Seq2SeqTrainingArguments
@@ -25,6 +25,19 @@ parser.add_argument('-save_steps', type=int, default=0,
                     help='Number of update steps per checkpoint ')
 parser.add_argument('-logging_steps', type=int, default=0,
                     help='Number of update steps per logging (and evaluation) ')
+parser.add_argument('-num_epoch', type=int, default=2,
+                    help='Number of epoches in training ')
+parser.add_argument('-learning_rate', type=float, default=0.001,
+                    help="""Peak learning rate. If adagrad/adadelta/adam is
+                    used, then this is the global learning rate. Recommended
+                    settings: sgd = 1, adagrad = 0.1,
+                    adadelta = 1, adam = 0.001""")
+parser.add_argument('-output', required=False, default='./whisper_finetune',
+                    help='Default folder to save the checkpoints')
+parser.add_argument('-batch_size', type=int, default=8,
+                    help='Number of update steps per checkpoint ')
+parser.add_argument('-bsz_accumulate', type=int, default=1,
+                    help='Number of update steps per logging (and evaluation) ')
 
 args = parser.parse_args()
 
@@ -32,6 +45,8 @@ args = parser.parse_args()
 
 # Load dataset (replace "path/to/save/dataset" with your actual path)
 dataset = load_from_disk(args.dataset)
+
+dataset = dataset.cast_column("audio_path", Audio())
 
 # Step 3: Load model and processor
 
@@ -107,11 +122,11 @@ model.config.suppress_tokens = []
 # Step 5: Define the training arguments:
 
 training_args = Seq2SeqTrainingArguments(
-    output_dir="./whisper-finetuned-flash",  # Directory to save model checkpoints
-    per_device_train_batch_size=16,  # Adjust based on your GPU memory
-    gradient_accumulation_steps=2,  # Effective batch size multiplier
+    output_dir=args.output,  # Directory to save model checkpoints
+    per_device_train_batch_size=args.batch_size,  # Adjust based on your GPU memory
+    gradient_accumulation_steps=args.bsz_accumulate,  # Effective batch size multiplier
     learning_rate=1e-5,
-    num_train_epochs=3,
+    num_train_epochs=args.num_epoch,
     evaluation_strategy="steps",
     save_steps=args.save_steps,
     logging_steps=args.logging_steps,
@@ -170,7 +185,7 @@ def inverse_sqrt_scheduler(optimizer, num_warmup_steps=1000):
 class CustomSeq2SeqTrainer(Seq2SeqTrainer):
     def create_optimizer(self):
         # Define the Adam optimizer with learning rate max = 0.0005
-        self.optimizer = AdamW(self.model.parameters(), lr=5e-4)
+        self.optimizer = AdamW(self.model.parameters(), lr=args.learning_rate)
         return self.optimizer
 
     def create_scheduler(self, num_training_steps: int, optimizer):
@@ -179,8 +194,8 @@ class CustomSeq2SeqTrainer(Seq2SeqTrainer):
         return self.lr_scheduler
 
     def train(self, *args, **kwargs):
-        # Compile the model before training
-        self.model = torch.compile(self.model)
+        # TODO: add option to Compile the model before training
+        # self.model = torch.compile(self.model)
         return super().train(*args, **kwargs)
 
 

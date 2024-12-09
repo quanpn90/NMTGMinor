@@ -27,7 +27,7 @@ dataset = DatasetDict({
     "validation": val_data
 })
 
-dataset = dataset.cast_column("audio_path", Audio())
+# dataset = dataset.cast_column("audio_path", Audio())
 
 
 print(dataset)
