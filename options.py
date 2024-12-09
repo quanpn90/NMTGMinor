@@ -654,7 +654,6 @@ def make_parser(parser):
     parser.add_argument('-ema', action="store_true",
                         help="""Use Exponential Moving Average (EMA) weights during training""")
 
-
     return parser
 
 
