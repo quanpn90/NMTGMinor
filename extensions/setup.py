@@ -116,7 +116,7 @@ ext_modules.append(
                            'layer_norm/ln_fwd_cuda_kernel.cu',
                            'layer_norm/ln_bwd_semi_cuda_kernel.cu'],
                   include_dirs=[os.path.join(this_dir, 'include')],
-                  extra_compile_args={'cxx': ['-O3'] + ['-march=core-avx2'] + version_dependent_macros + generator_flag,
+                  extra_compile_args={'cxx': ['-O3'] + version_dependent_macros + generator_flag,
                                       'nvcc': ['-O3',
                                                '-U__CUDA_NO_HALF_OPERATORS__',
                                                '-U__CUDA_NO_HALF_CONVERSIONS__',

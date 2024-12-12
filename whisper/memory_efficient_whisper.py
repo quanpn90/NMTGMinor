@@ -355,3 +355,52 @@ class MemoryEfficientWhisper(WhisperForConditionalGeneration):
             encoder_hidden_states=outputs.encoder_hidden_states,
             encoder_attentions=outputs.encoder_attentions,
         )
+
+
+
+
+def create_whisper_model(model_name, torch_dtype, attn_implementation="flash_attention_2"):
+    def replace_layer_with_weights(model, config):
+        for i in range(len(model.model.encoder.layers)):
+            old_layer = model.model.encoder.layers[i]
+            new_layer = MemoryEfficientWhisperEncoderLayer(config)
+
+            # Copy weights from the old layer to the new one
+            new_layer.load_state_dict(old_layer.state_dict())
+
+            dtype = next(old_layer.parameters()).dtype
+            new_layer.to(dtype)
+
+            # Replace the layer in the encoder
+            model.model.encoder.layers[i] = new_layer
+
+    def replace_layernorm_with_memory_efficient(model):
+        for name, module in model.named_children():
+            # Check if the current module is LayerNorm
+            if isinstance(module, torch.nn.LayerNorm):
+
+                custom_layer = MemoryEfficientLayerNorm(module.normalized_shape, module.eps)
+
+                # Copy weights and biases
+                custom_layer.weight.data.copy_(module.weight.data)
+                custom_layer.bias.data.copy_(module.bias.data)
+
+                # convert to the right type
+                custom_layer.to(module.weight.dtype)
+                # Replace with MemoryEfficientLayerNorm
+                setattr(model, name, custom_layer)
+            else:
+                # Recursively apply to submodules
+                replace_layernorm_with_memory_efficient(module)
+
+
+    model = MemoryEfficientWhisper.from_pretrained(model_name,
+                                                   low_cpu_mem_usage=True,
+                                                   torch_dtype=torch_dtype,
+                                                   attn_implementation=attn_implementation,
+                                                   )
+
+    replace_layer_with_weights(model, model.config)
+    replace_layernorm_with_memory_efficient(model)
+
+    return model
