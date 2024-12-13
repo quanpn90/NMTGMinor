@@ -39,6 +39,8 @@ parser.add_argument('-batch_size', type=int, default=8,
                     help='Number of update steps per checkpoint ')
 parser.add_argument('-bsz_accumulate', type=int, default=1,
                     help='Number of update steps per logging (and evaluation) ')
+parser.add_argument('-text_normalizer', type=str, default="none",
+                    help='Text Normalizer: if not none select languages such as "english" or "german".')
 
 args = parser.parse_args()
 
@@ -98,21 +100,30 @@ training_args = Seq2SeqTrainingArguments(
     dataloader_num_workers=16  # Number of workers for data loading
 )
 
-
-# Step 6: Set Up the Data Collator
+if args.text_normalizer != "none":
+    print("[INFO] Using the %s text normalizer..." % args.text_normalizer)
+    processor.language = args.text_normalizer
 
 # data_collator = DataCollatorForSeq2Seq(processor, model=model, return_tensors="pt")
 class WhisperDataCollator(DataCollatorWithPadding):
-    def __init__(self, processor):
+    def __init__(self, processor, normalize="none"):
         # Initialize the parent class with the tokenizer for padding
         super().__init__(tokenizer=processor.tokenizer)
         self.processor = processor
+        self.normalize = normalize != "none"
 
     def __call__(self, samples):
         # Extract audio arrays and transcriptions
         audio_arrays = [sample["audio_path"]["array"] for sample in samples]
         sampling_rate = 16000
-        transcriptions = [sample["transcription"] for sample in samples]
+        if self.normalize:
+            transcriptions = list()
+            for sample in samples:
+                t = sample["transcription"]
+                normalized_t = self.processor.tokenizer._normalize(t)
+                transcriptions.append(normalized_t)
+        else:
+            transcriptions = [sample["transcription"] for sample in samples]
 
         # Process audio features
         input_features = self.processor.feature_extractor(
@@ -130,7 +141,7 @@ class WhisperDataCollator(DataCollatorWithPadding):
 
 
 # Define the custom data collator
-data_collator = WhisperDataCollator(processor)
+data_collator = WhisperDataCollator(processor, normalize=args.text_normalizer)
 
 
 def inverse_sqrt_scheduler(optimizer, num_warmup_steps=1000):

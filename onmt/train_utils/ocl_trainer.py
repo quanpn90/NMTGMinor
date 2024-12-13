@@ -1115,8 +1115,6 @@ class OCLTrainer(object):
                         encoder_alpha = 0.0001
                         decoder_alpha = 0.0001
 
-
-
                         # alpha is small so most of the weights focus on the previous weights
                         for key in new_encoder_weights.keys():
                             new_encoder_weights[key] = new_encoder_weights[key] * encoder_alpha + (1 - encoder_alpha) * \
