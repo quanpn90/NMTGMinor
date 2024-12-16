@@ -22,6 +22,8 @@ from memory_efficient_whisper import (MemoryEfficientWhisper,
 parser = argparse.ArgumentParser(description='create_dataset_whisper')
 parser.add_argument('-dataset', required=True,
                     help="Path to the dataset in huggingface format")
+parser.add_argument('-checkpoint', type=str, default="none",
+                    help='Path to the checkpoint. Use the default (model card) if none is provided')
 parser.add_argument('-save_steps', type=int, default=0,
                     help='Number of update steps per checkpoint ')
 parser.add_argument('-logging_steps', type=int, default=0,
@@ -33,6 +35,8 @@ parser.add_argument('-learning_rate', type=float, default=0.001,
                     used, then this is the global learning rate. Recommended
                     settings: sgd = 1, adagrad = 0.1,
                     adadelta = 1, adam = 0.001""")
+parser.add_argument('-weight_decay', type=float, default=0.001,
+                    help="""Weight Decay for AdamW""")
 parser.add_argument('-output', required=False, default='./whisper_finetune',
                     help='Default folder to save the checkpoints')
 parser.add_argument('-batch_size', type=int, default=8,
@@ -41,6 +45,8 @@ parser.add_argument('-bsz_accumulate', type=int, default=1,
                     help='Number of update steps per logging (and evaluation) ')
 parser.add_argument('-text_normalizer', type=str, default="none",
                     help='Text Normalizer: if not none select languages such as "english" or "german".')
+parser.add_argument('-spec_augment', action='store_true',
+                    help="Use spec augmentation")
 
 args = parser.parse_args()
 
@@ -58,14 +64,23 @@ torch_dtype = torch.bfloat16 if torch.cuda.is_available() else torch.float32
 
 # Load model and processor
 model_name = "openai/whisper-large-v3-turbo"  # Choose the base model size
-processor = WhisperProcessor.from_pretrained(model_name)
+checkpoint_path = args.checkpoint
+if checkpoint_path == "none":
+    checkpoint_path = model_name
 
-model = create_whisper_model(model_name, torch_dtype, attn_implementation="flash_attention_2")
+
+processor = WhisperProcessor.from_pretrained(model_name)
+model = create_whisper_model(checkpoint_path, torch_dtype, attn_implementation="flash_attention_2")
 
 
 # Adjust model settings for fine-tuning
 model.config.forced_decoder_ids = None
 model.config.suppress_tokens = []
+
+if args.spec_augment:
+    model.config.apply_spec_augment = True
+    model.config.mask_time_prob = 0.05
+    model.config.mask_feature_prob = 0.05
 
 # Step 4: Prepare the dataset for training
 # DO THIS ON THE FLY
@@ -120,7 +135,7 @@ class WhisperDataCollator(DataCollatorWithPadding):
             transcriptions = list()
             for sample in samples:
                 t = sample["transcription"]
-                normalized_t = self.processor.tokenizer._normalize(t)
+                normalized_t = self.processor.tokenizer.normalize(t)
                 transcriptions.append(normalized_t)
         else:
             transcriptions = [sample["transcription"] for sample in samples]
@@ -156,7 +171,7 @@ def inverse_sqrt_scheduler(optimizer, num_warmup_steps=1000):
 class CustomSeq2SeqTrainer(Seq2SeqTrainer):
     def create_optimizer(self):
         # Define the Adam optimizer with learning rate max = 0.0005
-        self.optimizer = AdamW(self.model.parameters(), lr=args.learning_rate)
+        self.optimizer = AdamW(self.model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay)
         return self.optimizer
 
     def create_scheduler(self, num_training_steps: int, optimizer):

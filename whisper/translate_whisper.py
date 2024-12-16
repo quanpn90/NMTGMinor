@@ -28,7 +28,7 @@ parser.add_argument('-beam_size', type=int, default=4,
                     help='Beam size during decoding')
 parser.add_argument('-output_file', required=True,
                     help="Path to the output_file to be written")
-parser.add_argument('-target_file', required=False,
+parser.add_argument('-target_file', required=False, default="",
                     help="Path to the reference file. If provided word error rate will be computed")
 
 args = parser.parse_args()
@@ -49,6 +49,8 @@ model = create_whisper_model(model_card, torch_dtype=torch_dtype,
                              attn_implementation='flash_attention_2')
 
 model.to(device)
+
+tokenizer = processor.tokenizer
 
 pipe = pipeline(
     "automatic-speech-recognition",
@@ -75,34 +77,74 @@ src_file = args.src
 writer = open(args.output_file, 'w')
 
 audio_list = list()
+total_hyp_words = []
+total_ref_words = []
 
-def process_audio_list(counter = 0):
+def process_audio_list(counter = 0, references=None):
 
+    global total_ref_words, total_hyp_words
     decode_results = pipe(audio_list, generate_kwargs=generate_kwargs, batch_size=len(audio_list))
-    # print(decode_results)
 
     for decode_result in decode_results:
         transcript = decode_result["text"]
-        counter = counter + 1
+
+        transcript = tokenizer.normalize(transcript)
         print('PRED %d: %s' % (counter, transcript))
+        if references is not None:
+            ref = references[counter]
+            ref = tokenizer.normalize(ref)
+            print('REF %d: %s' % (counter, ref))
+            wer = jiwer.wer(ref, transcript)
+            print(f"WER for line: {wer:.2%}")
+
+            total_ref_words += ref.split()
+            total_hyp_words += transcript.split()
+
         print()
         writer.write(transcript)
         writer.write("\n")
+        counter += 1
 
-def process_long_audio(audio_file, counter = 0):
+def process_long_audio(audio_file, counter = 0, references=None):
 
+    global total_ref_words, total_hyp_words
     decode_result = pipe(audio_file, generate_kwargs=generate_kwargs)
     transcript = decode_result["text"]
-    counter = counter + 1
+
+    transcript = tokenizer.normalize(transcript)
+
     print('PRED %d: %s' % (counter, transcript))
+    if references is not None:
+        ref = references[counter]
+        ref = tokenizer.normalize(ref)
+        print('REF  %d: %s' % (counter, ref))
+        wer = jiwer.wer(ref, transcript)
+        print(f"WER for line: {wer:.2%}")
+
+        total_ref_words += ref.split()
+        total_hyp_words += transcript.split()
+
     print()
     writer.write(transcript)
     writer.write("\n")
 
+
 c = 0
+
+# prepare for wer computation automatically
+if len(args.target_file) > 0:
+    import jiwer
+    print("[INFO] Target file is provided. Computing WER during transcribing...")
+    ref_lines = open(args.target_file).readlines()
+else:
+    ref_lines = None
+
+print("[INFO] Transcription starts...")
+
+# read the source line by line
 for line in open(src_file).readlines():
 
-    audio_file = line.split()[1]
+    audio_file = line.strip()
 
     waveform, sample_rate = torchaudio.load(audio_file)
     duration = waveform.size(1) / sample_rate
@@ -111,12 +153,12 @@ for line in open(src_file).readlines():
     if duration > 30.000:
         # process the current batch if not empty
         if len(audio_list) > 0:
-            process_audio_list(c)
+            process_audio_list(c, references=ref_lines)
             c = c + len(audio_list)
             audio_list = list()
 
         # use long-form whisper to deal with the long audio file
-        process_long_audio(audio_file, c)
+        process_long_audio(audio_file, c, references=ref_lines)
         c = c + 1
 
     else:
@@ -125,13 +167,20 @@ for line in open(src_file).readlines():
         # TODO: group audio files in a list for batch decoding
         if len(audio_list) >= args.batch_size:
             # print(audio_list)
-            process_audio_list(c)
+            process_audio_list(c, references=ref_lines)
             c = c + len(audio_list)
             audio_list = list()
 
 # finish the last batch if not empty
 if len(audio_list) > 0:
-    process_audio_list(c)
+    process_audio_list(c, references=ref_lines)
 
 writer.close()
-    
+
+if len(args.target_file) > 0:
+    hypothesis_text = " ".join(total_hyp_words)
+    reference_text = " ".join(total_ref_words)
+
+    wer = jiwer.wer(reference_text, hypothesis_text)
+
+    print(f"Total WER: {wer:.2%}")
