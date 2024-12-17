@@ -36,7 +36,7 @@ from memory_efficient_whisper import (MemoryEfficientWhisper,
 
 # Step 1: Parsing arguments
 
-parser = argparse.ArgumentParser(description='create_dataset_whisper')
+parser = argparse.ArgumentParser(description='train whisper continual learning')
 parser.add_argument('-dataset', required=True,
                     help="Path to the dataset in huggingface format")
 parser.add_argument('-checkpoint', type=str, default="none",

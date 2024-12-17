@@ -6,6 +6,8 @@ import torch.nn.functional as F
 import os
 
 from typing import Optional, Tuple, Union
+from dataclasses import dataclass
+from collections import OrderedDict
 import numpy as np
 import torch
 import torch.utils.checkpoint
@@ -237,6 +239,9 @@ class MemoryEfficientWhisper(WhisperForConditionalGeneration):
         super().__init__(config)
         # TODO: add label smoothing during training
 
+        self.teacher = None
+        self.teacher_distillation = 0
+
     def forward(
             self,
             input_features: Optional[torch.FloatTensor] = None,
@@ -290,14 +295,39 @@ class MemoryEfficientWhisper(WhisperForConditionalGeneration):
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
         if labels is not None:
-            # if labels.shape[1] > self.max_target_positions:
-            #     raise ValueError(
-            #         f"Labels' sequence length {labels.shape[1]} cannot exceed the maximum allowed length of {self.max_target_positions} tokens."
-            #     )
+            if labels.shape[1] > self.max_target_positions:
+                raise ValueError(
+                    f"Labels' sequence length {labels.shape[1]} cannot exceed the maximum allowed length of {self.max_target_positions} tokens."
+                )
             if decoder_input_ids is None and decoder_inputs_embeds is None:
                 decoder_input_ids = shift_tokens_right(
                     labels, self.config.pad_token_id, self.config.decoder_start_token_id
                 )
+
+        if self.teacher is not None and self.teacher_distillation > 0 and self.training:
+            with torch.no_grad():
+                teacher_outputs = self.teacher(
+                    input_features,
+                    attention_mask=attention_mask,
+                    decoder_input_ids=decoder_input_ids,
+                    encoder_outputs=encoder_outputs,
+                    decoder_attention_mask=decoder_attention_mask,
+                    head_mask=head_mask,
+                    decoder_head_mask=decoder_head_mask,
+                    cross_attn_head_mask=cross_attn_head_mask,
+                    past_key_values=past_key_values,
+                    decoder_inputs_embeds=decoder_inputs_embeds,
+                    decoder_position_ids=decoder_position_ids,
+                    use_cache=use_cache,
+                    output_attentions=output_attentions,
+                    output_hidden_states=output_hidden_states,
+                    return_dict=return_dict,
+                    cache_position=cache_position,
+                )
+
+                teacher_lm_logits = self.proj_out(teacher_outputs[0])
+        else:
+            teacher_lm_logits = None
 
         outputs = self.model(
             input_features,
@@ -320,6 +350,8 @@ class MemoryEfficientWhisper(WhisperForConditionalGeneration):
         lm_logits = self.proj_out(outputs[0])
 
         loss = None
+        ce_loss = None
+        distilled_loss = None
         if labels is not None:
 
             labels = labels.to(lm_logits.device).reshape(-1)
@@ -333,18 +365,30 @@ class MemoryEfficientWhisper(WhisperForConditionalGeneration):
                                         half_to_float)
                 bsz = labels.size(0)
                 loss = loss.sum().div(bsz)
+                ce_loss = loss
             else:
                 loss_fct = CrossEntropyLoss(ignore_index=-100,
                                             reduction='mean',
                                             label_smoothing=0.0)
                 # move labels to correct device to enable PP
                 loss = loss_fct(logits, labels)
+                ce_loss = loss
+
+            if teacher_lm_logits is not None:
+                distill_loss = torch.nn.functional.mse_loss(logits.view(-1, logits.size(-1)),
+                                                            teacher_lm_logits.view(-1, logits.size(-1)),
+                                                            reduction='none')
+                distilled_loss = distilled_loss.sum().div(bsz)
+
+                loss = ce_loss + self.teacher_distillation * distill_loss
+            else:
+                distill_loss = 0
 
         if not return_dict:
             output = (lm_logits,) + outputs[1:]
             return ((loss,) + output) if loss is not None else output
 
-        return Seq2SeqLMOutput(
+        return DistilledSeq2SeqLMOutput(
             loss=loss,
             logits=lm_logits,
             past_key_values=outputs.past_key_values,
@@ -354,12 +398,28 @@ class MemoryEfficientWhisper(WhisperForConditionalGeneration):
             encoder_last_hidden_state=outputs.encoder_last_hidden_state,
             encoder_hidden_states=outputs.encoder_hidden_states,
             encoder_attentions=outputs.encoder_attentions,
+            ce_loss=ce_loss,
+            distilled_loss=distilled_loss,
         )
 
+    def state_dict(self, destination=None, prefix='', keep_vars=False):
+        # Call the parent method to get the original state_dict
+        original_state_dict = super().state_dict(destination, prefix, keep_vars)
+        # Create a new OrderedDict excluding the parameters you don't want
+        filtered_state_dict = OrderedDict(
+            (k, v) for k, v in original_state_dict.items() if "teacher." not in k
+        )
+        return filtered_state_dict
+
+@dataclass
+class DistilledSeq2SeqLMOutput(Seq2SeqLMOutput):
+    ce_loss: Optional[torch.FloatTensor] = None  # Add distillation_loss
+    distilled_loss: Optional[torch.FloatTensor] = None  # Add distillation_loss
 
 
-
-def create_whisper_model(model_name, torch_dtype, attn_implementation="flash_attention_2"):
+def create_whisper_model(model_name, torch_dtype,
+                         attn_implementation="flash_attention_2",
+                         device_map="auto"):
     def replace_layer_with_weights(model, config):
         for i in range(len(model.model.encoder.layers)):
             old_layer = model.model.encoder.layers[i]
@@ -398,9 +458,12 @@ def create_whisper_model(model_name, torch_dtype, attn_implementation="flash_att
                                                    low_cpu_mem_usage=True,
                                                    torch_dtype=torch_dtype,
                                                    attn_implementation=attn_implementation,
+                                                   device_map=device_map
                                                    )
 
     replace_layer_with_weights(model, model.config)
     replace_layernorm_with_memory_efficient(model)
 
     return model
+
+
