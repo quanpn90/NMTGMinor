@@ -306,7 +306,7 @@ class MemoryEfficientWhisper(WhisperForConditionalGeneration):
 
         if self.teacher is not None and self.teacher_distillation > 0 and self.training:
             with torch.no_grad():
-                teacher_outputs = self.teacher(
+                teacher_outputs = self.teacher.model(
                     input_features,
                     attention_mask=attention_mask,
                     decoder_input_ids=decoder_input_ids,
@@ -325,7 +325,7 @@ class MemoryEfficientWhisper(WhisperForConditionalGeneration):
                     cache_position=cache_position,
                 )
 
-                teacher_lm_logits = self.proj_out(teacher_outputs[0])
+                teacher_lm_logits = self.teacher.proj_out(teacher_outputs[0])
         else:
             teacher_lm_logits = None
 
@@ -375,14 +375,14 @@ class MemoryEfficientWhisper(WhisperForConditionalGeneration):
                 ce_loss = loss
 
             if teacher_lm_logits is not None:
-                distill_loss = torch.nn.functional.mse_loss(logits.view(-1, logits.size(-1)),
+                distilled_loss = torch.nn.functional.mse_loss(logits.view(-1, logits.size(-1)),
                                                             teacher_lm_logits.view(-1, logits.size(-1)),
                                                             reduction='none')
                 distilled_loss = distilled_loss.sum().div(bsz)
 
-                loss = ce_loss + self.teacher_distillation * distill_loss
+                loss = ce_loss + self.teacher_distillation * distilled_loss
             else:
-                distill_loss = 0
+                distilled_loss = 0
 
         if not return_dict:
             output = (lm_logits,) + outputs[1:]
@@ -419,7 +419,11 @@ class DistilledSeq2SeqLMOutput(Seq2SeqLMOutput):
 
 def create_whisper_model(model_name, torch_dtype,
                          attn_implementation="flash_attention_2",
-                         device_map="auto"):
+                         low_cpu_mem_usage=False,
+                         device_map="none",
+                         mem_efficient=True):
+
+    print("[INFO] Creating Whisper model from %s " % model_name)
     def replace_layer_with_weights(model, config):
         for i in range(len(model.model.encoder.layers)):
             old_layer = model.model.encoder.layers[i]
@@ -453,16 +457,24 @@ def create_whisper_model(model_name, torch_dtype,
                 # Recursively apply to submodules
                 replace_layernorm_with_memory_efficient(module)
 
+    whipser_class = MemoryEfficientWhisper if mem_efficient else WhisperForConditionalGeneration
 
-    model = MemoryEfficientWhisper.from_pretrained(model_name,
-                                                   low_cpu_mem_usage=True,
-                                                   torch_dtype=torch_dtype,
-                                                   attn_implementation=attn_implementation,
-                                                   device_map=device_map
-                                                   )
-
-    replace_layer_with_weights(model, model.config)
-    replace_layernorm_with_memory_efficient(model)
+    if device_map != "none":
+        model = whipser_class.from_pretrained(model_name,
+                                                       low_cpu_mem_usage=low_cpu_mem_usage,
+                                                       torch_dtype=torch_dtype,
+                                                       attn_implementation=attn_implementation,
+                                                       device_map=device_map,
+                                                       )
+    else:
+        model = whipser_class.from_pretrained(model_name,
+                                                       low_cpu_mem_usage=low_cpu_mem_usage,
+                                                       torch_dtype=torch_dtype,
+                                                       attn_implementation=attn_implementation
+                                                       )
+    if mem_efficient:
+        replace_layer_with_weights(model, model.config)
+        replace_layernorm_with_memory_efficient(model)
 
     return model
 

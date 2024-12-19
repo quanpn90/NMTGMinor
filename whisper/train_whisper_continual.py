@@ -12,7 +12,7 @@ from transformers import DataCollatorWithPadding
 from transformers import Seq2SeqTrainer
 # from transformers import AdamW
 from torch.optim.lr_scheduler import LambdaLR
-from transformers import TrainerCallback
+from transformers import TrainerCallback, TrainerState, TrainerControl
 
 # Get the local rank from the environment variables
 local_rank = int(os.environ.get("LOCAL_RANK", 0))
@@ -70,6 +70,10 @@ parser.add_argument('-teacher_distillation', type=float, default=0
                     , help='Use the original Whisper model as a teacher')
 parser.add_argument('-filter_length', action='store_true',
                     help="Use spec augmentation")
+parser.add_argument('-ema', action='store_true',
+                    help="Exponential Moving Average (EMA) of model weights")
+
+
 
 args = parser.parse_args()
 
@@ -312,6 +316,60 @@ class ConsoleLoggingCallback(TrainerCallback):
                 print(f"  lr: {learning_rate:.6f}")
 
 
+class ExponentialAveragingCallback(TrainerCallback):
+    def __init__(self, alpha_values=None):
+        """
+        Exponential averaging callback for weight updates.
+
+        Args:
+            alpha_values (list[float]): A list of alpha values (0 to 1) for each parameter group.
+        """
+        self.alpha_values = alpha_values  # Coefficients for exponential averaging
+        self.pre_update_weights = []      # To store pre-update weights
+
+    def on_step_begin(self, args,
+                      state: TrainerState,
+                      control: TrainerControl,
+                      model=None,
+                      optimizer=None, **kwargs):
+        """
+        Save pre-update weights before optimizer step.
+        """
+        # Clear the pre-update weight storage
+        self.pre_update_weights = []
+
+        for group in optimizer.param_groups:
+            group_weights = []
+            for param in group['params']:
+                if param.grad is not None:
+                    group_weights.append(param.data.clone().detach())  # Save pre-update weights
+            self.pre_update_weights.append(group_weights)
+
+    def on_step_end(self, args, state: TrainerState, control: TrainerControl, model=None, optimizer=None, **kwargs):
+        """
+        Perform exponential averaging of weights after optimizer step.
+        """
+        if self.alpha_values is None:
+            # Default alpha=0.9 for all parameter groups if not provided
+            # TODO: assign alpha based on training steps (maybe 1/t)?
+            self.alpha_values = [0.9] * len(optimizer.param_groups)
+
+        # Loop through each parameter group and apply exponential averaging
+        for group_idx, (group, alpha) in enumerate(zip(optimizer.param_groups, self.alpha_values)):
+            pre_weights = self.pre_update_weights[group_idx]
+
+            for param, pre_weight in zip(group['params'], pre_weights):
+                if param.grad is not None:
+                    # Exponential averaging: weight = (1 - alpha) * pre_update + alpha * updated
+                    param.data.copy_((1 - alpha) * pre_weight + alpha * param.data)
+
+callbacks = [ConsoleLoggingCallback()]
+
+# if args.ema:
+
+
+
+
 # Step 7: Train the model
 trainer = CustomSeq2SeqTrainer(
     model=model,
@@ -321,7 +379,7 @@ trainer = CustomSeq2SeqTrainer(
     data_collator=data_collator,
     processing_class=processor.feature_extractor,
     # processing_class
-    callbacks=[ConsoleLoggingCallback()]
+    callbacks=callbacks
 )
 
 # Start training
