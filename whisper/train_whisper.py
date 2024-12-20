@@ -25,8 +25,10 @@ if local_rank != 0:
     warnings.filterwarnings("ignore")  # Ignore all warnings
 
 import warnings
+
 warnings.filterwarnings("ignore", message="Positional args are being deprecated, use kwargs instead.")
-warnings.filterwarnings("ignore", message="Passing a tuple of `past_key_values` is deprecated and will be removed in Transformers v4.43.0. You should pass an instance of `EncoderDecoderCache` instead, e.g. `past_key_values=EncoderDecoderCache.from_legacy_cache(past_key_values)`.")
+warnings.filterwarnings("ignore",
+                        message="Passing a tuple of `past_key_values` is deprecated and will be removed in Transformers v4.43.0. You should pass an instance of `EncoderDecoderCache` instead, e.g. `past_key_values=EncoderDecoderCache.from_legacy_cache(past_key_values)`.")
 
 # memory efficient Whisper
 from memory_efficient_whisper import (MemoryEfficientWhisper,
@@ -57,6 +59,9 @@ parser.add_argument('-learning_rate', type=float, default=0.001,
                     adadelta = 1, adam = 0.001""")
 parser.add_argument('-weight_decay', type=float, default=0.001,
                     help="""Weight Decay for AdamW""")
+parser.add_argument('-warm_up_steps', type=int, default=2000,
+                    help='Number of warm up steps for learning rate')
+
 parser.add_argument('-output', required=False, default='./whisper_finetune',
                     help='Default folder to save the checkpoints')
 parser.add_argument('-batch_size', type=int, default=8,
@@ -95,12 +100,14 @@ for dataset_name in dataset_names:
         max_length = 448
         print("[INFO] Filtering dataset %s the sequences longer than 448 tokens..." % dataset_name)
 
+
         def filter_long_examples(example):
             # Ensure both input_ids and labels are within the max length
             # return len(example["input_ids"]) <= max_length and len(example["labels"]) <= max_length
 
             x = processor.tokenizer(example["transcription"]).input_ids
             return len(x) <= max_length
+
 
         # Apply the filter to your dataset
         dataset = dataset.filter(filter_long_examples, num_proc=64)
@@ -119,7 +126,6 @@ checkpoint_path = args.checkpoint
 if checkpoint_path == "none":
     checkpoint_path = model_name
 
-
 # passing a device_map requires the low_cpu_mem_usage
 model = create_whisper_model(checkpoint_path, torch_dtype, attn_implementation="flash_attention_2",
                              low_cpu_mem_usage=True,
@@ -129,15 +135,14 @@ if args.teacher_distillation > 0:
     print("[INFO] Using the Whisper model as a teacher")
     # actually student and teacher can be the same xD
     teacher = create_whisper_model(model_name, torch_dtype, attn_implementation="flash_attention_2",
-                             low_cpu_mem_usage=True,
-                             device_map={"": device})
+                                   low_cpu_mem_usage=True,
+                                   device_map={"": device})
 
     # freeze the parameters for the teacher
     for param in teacher.parameters():
         param.requires_grad = False
     model.teacher = teacher
     model.teacher_distillation = args.teacher_distillation
-
 
 # Adjust model settings for fine-tuning
 model.config.forced_decoder_ids = None
@@ -147,6 +152,35 @@ if args.spec_augment:
     model.config.apply_spec_augment = True
     model.config.mask_time_prob = 0.05
     model.config.mask_feature_prob = 0.05
+
+# Create optimizer
+
+optimizer_grouped_parameters = [
+    {
+        "params": [p for p in model.parameters() if p.requires_grad],
+        "weight_decay": args.weight_decay,
+    }
+]
+
+betas = (0.9, 0.999)
+
+adamw_class = torch.optim.AdamW
+
+optimizer = adamw_class(optimizer_grouped_parameters,
+                        lr=args.learning_rate,
+                        betas=betas)
+
+
+def inverse_sqrt_scheduler(_optimizer, num_warmup_steps=1000):
+    def lr_lambda(current_step):
+        if current_step < num_warmup_steps:
+            return float(current_step) / float(max(1, num_warmup_steps))
+        return (num_warmup_steps ** 0.5) / (current_step ** 0.5)
+
+    return LambdaLR(_optimizer, lr_lambda)
+
+
+lr_scheduler = inverse_sqrt_scheduler(optimizer, num_warmup_steps=args.warm_up_steps)
 
 # Step 4: Prepare the dataset for training
 # DO THIS ON THE FLY
@@ -166,10 +200,10 @@ if args.spec_augment:
 # TODO: check layerdrop values to determine ddp_find_unused_parameters
 
 
-
 if args.text_normalizer != "none":
     print("[INFO] Using the %s text normalizer..." % args.text_normalizer)
     processor.language = args.text_normalizer
+
 
 # data_collator = DataCollatorForSeq2Seq(processor, model=model, return_tensors="pt")
 class WhisperDataCollator(DataCollatorWithPadding):
@@ -211,42 +245,21 @@ class WhisperDataCollator(DataCollatorWithPadding):
 data_collator = WhisperDataCollator(processor, normalize=args.text_normalizer)
 
 
-def inverse_sqrt_scheduler(optimizer, num_warmup_steps=1000):
-    def lr_lambda(current_step):
-        if current_step < num_warmup_steps:
-            return float(current_step) / float(max(1, num_warmup_steps))
-        return (num_warmup_steps ** 0.5) / (current_step ** 0.5)
-
-    return LambdaLR(optimizer, lr_lambda)
-
-
 class CustomSeq2SeqTrainer(Seq2SeqTrainer):
-    def create_optimizer(self):
-        # Define the Adam optimizer with learning rate max = 0.0005
-        optimizer_grouped_parameters = [
-            {
-                "params": [p for p in self.model.parameters() if p.requires_grad],
-                "weight_decay": args.weight_decay,
-            }
-        ]
-        betas=(0.9, 0.999)
-
-        adamw_class = torch.optim.AdamW
-
-        self.optimizer = adamw_class(optimizer_grouped_parameters,
-                                     lr=args.learning_rate,
-                                     betas=betas)
-        return self.optimizer
-
-    def create_scheduler(self, num_training_steps: int, optimizer):
-        # print(optimizer, flush=True)
-        self.lr_scheduler = inverse_sqrt_scheduler(optimizer, num_warmup_steps=1000)
-        return self.lr_scheduler
+    # def create_optimizer(self):
+    #     # Define the Adam optimizer with learning rate max = 0.0005
+    #     self.optimizer = optimizer
+    #
+    # def create_scheduler(self, num_training_steps: int, optimizer):
+    #     # print(optimizer, flush=True)
+    #     self.lr_scheduler = inverse_sqrt_scheduler(optimizer, num_warmup_steps=1000)
+    #     return self.lr_scheduler
 
     def train(self, *args, **kwargs):
         # TODO: add option to Compile the model before training
         # self.model = torch.compile(self.model)
         return super().train(*args, **kwargs)
+
 
 # Define the scheduler
 
@@ -268,6 +281,16 @@ class ConsoleLoggingCallback(TrainerCallback):
 
 
 callbacks = [ConsoleLoggingCallback()]
+
+def get_num_updates(_optimizer):
+    num_updates = None
+    for param in optimizer.state.values():
+        if 'step' in param:  # Look for the 'step' key in the optimizer state
+            num_updates = param['step']
+            break  # Use the first available 'step' value
+
+    return num_updates
+
 
 if args.ema:
     class EMACallback(TrainerCallback):
@@ -296,7 +319,8 @@ if args.ema:
                         group_weights.append(param.data.clone().detach())  # Save pre-update weights
                 self.pre_update_weights.append(group_weights)
 
-        def on_step_end(self, args, state: TrainerState, control: TrainerControl, model=None, optimizer=None, **kwargs):
+        def on_step_end(self, args, state: TrainerState, control: TrainerControl, model=None,
+                        optimizer=None, **kwargs):
             """
             Perform exponential averaging of weights after optimizer step.
             """
@@ -304,7 +328,7 @@ if args.ema:
             #     # Default alpha=0.9 for all parameter groups if not provided
             #     self.alpha_values = [0.9] * len(optimizer.param_groups)
 
-            num_update = state.global_step
+            num_update = get_num_updates(optimizer)
 
             if num_update == 0:  # Prevent division by zero on the first step
                 return
@@ -320,8 +344,10 @@ if args.ema:
                         # Exponential averaging: weight = (1 - alpha) * pre_update + alpha * updated
                         param.data.copy_((1 - alpha) * pre_weight + alpha * param.data)
 
+
     print("[INFO] Trainining the model with Exponential Moving Average SGD...")
     callbacks.append(EMACallback())
+
 
 # what happens if we have a list of dataset?
 # dataset_list =
@@ -389,6 +415,7 @@ def continual_learning_single_trainer(model, datasets,
             eval_dataset=dataset["validation"],
             data_collator=data_collator,
             processing_class=processor.feature_extractor,
+            optimizers=(optimizer, lr_scheduler),
             # processing_class
             callbacks=callbacks
         )
@@ -398,4 +425,3 @@ def continual_learning_single_trainer(model, datasets,
 
 
 continual_learning_single_trainer(model, datasets, dataset_names, callbacks)
-

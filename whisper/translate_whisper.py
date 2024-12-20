@@ -33,6 +33,8 @@ parser.add_argument('-output_file', required=True,
                     help="Path to the output_file to be written")
 parser.add_argument('-target_file', required=False, default="",
                     help="Path to the reference file. If provided word error rate will be computed")
+parser.add_argument('-language', type=str, default="english",
+                    help='Text Normalizer: if not none select languages such as "english" or "german".')
 
 args = parser.parse_args()
 
@@ -74,7 +76,7 @@ generate_kwargs = {
     "logprob_threshold": -1.0,
     "no_speech_threshold": 0.6,
     "return_timestamps": True,  # long-form whisper needs this
-    "language": "english"
+    "language": args.language
 }
 
 def compute_wer(reference, hypothesis, **kwargs):
