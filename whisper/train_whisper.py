@@ -21,7 +21,7 @@ device = torch.device(f"cuda:{local_rank}")
 if local_rank != 0:
     # Suppress stdout and stderr for non-zero ranks
     sys.stdout = open(os.devnull, "w")
-    sys.stderr = open(os.devnull, "w")
+    # sys.stderr = open(os.devnull, "w")
     warnings.filterwarnings("ignore")  # Ignore all warnings
 
 import warnings
@@ -74,6 +74,9 @@ parser.add_argument('-teacher_distillation', type=float, default=0
 parser.add_argument('-filter_length', action='store_true',
                     help="Use spec augmentation")
 parser.add_argument('-ema', action='store_true',
+                    help="Use exponential moving average during training")
+
+parser.add_argument('-streaming', action='store_true',
                     help="Use exponential moving average during training")
 
 args = parser.parse_args()
