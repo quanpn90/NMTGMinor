@@ -102,4 +102,4 @@ class BatchEnsembleLinear(nn.Module):
             # Modulate output and return mean over ensembles
             modulated_output = shared_output * r_expanded + self.bias
             # Shape: [num_ensembles, batch_size, length, out_features]
-            return modulated_output  # Shape: [batch_size, length, out_features]
+            return modulated_output

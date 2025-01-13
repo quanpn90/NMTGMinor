@@ -423,6 +423,8 @@ def create_whisper_model(model_name, torch_dtype,
                          device_map="none",
                          mem_efficient=True):
 
+    # here model_name can be either the huggingface path, or the local path
+
     print("[INFO] Creating Whisper model from %s " % model_name)
     def replace_layer_with_weights(model, config):
         for i in range(len(model.model.encoder.layers)):
