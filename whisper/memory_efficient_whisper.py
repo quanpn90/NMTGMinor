@@ -230,17 +230,23 @@ class MemoryEfficientWhisperEncoderLayer(WhisperEncoderLayer):
         return outputs
 
 
+from .batch_ensemble_whisper_config import WhisperConfig, BatchEnsembleWhisperConfig
+
+
 class MemoryEfficientWhisper(WhisperForConditionalGeneration):
 
     """
     Uses fast xentropy loss during training (the loss computation is about 5x faster than pytorch)
     """
-    def __init__(self, config):
+    def __init__(self, config: Union[WhisperConfig, BatchEnsembleWhisperConfig]):
         super().__init__(config)
         # TODO: add label smoothing during training
 
         self.teacher = None
         self.teacher_distillation = 0
+
+        if isinstance(config, BatchEnsembleWhisperConfig):
+            self.n_ensembles = config.n_ensembles
 
     def forward(
             self,

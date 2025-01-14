@@ -1,5 +1,5 @@
 from transformers import WhisperForConditionalGeneration
-from transformers.models.whisper.modeling_whisper import WhisperEncoderLayer
+from transformers.models.whisper.modeling_whisper import WhisperEncoderLayer, WhisperDecoderLayer
 
 import torch
 import torch.nn.functional as F
@@ -16,6 +16,9 @@ from torch.nn import CrossEntropyLoss
 
 from transformers.cache_utils import EncoderDecoderCache
 from transformers.modeling_outputs import Seq2SeqLMOutput
+from transformers.activations import ACT2FN
+
+
 
 os.environ["FLASH_ATTENTION_DETERMINISTIC"] = "0"
 
@@ -32,6 +35,10 @@ from .batch_ensemble_attention import (BatchEnsembleWhisperAttention,
                                        BatchEnsembleWhisperFlashAttention2,
                                        BatchEnsembleWhisperSdpaAttention)
 
+from .batch_ensemble_whisper_config import WhisperConfig, BatchEnsembleWhisperConfig
+
+from .memory_efficient_whisper import softmax_xentropy, fast_xentropy
+
 
 class BatchEnsembleWhisperEncoderLayer(MemoryEfficientWhisperEncoderLayer):
     """
@@ -39,10 +46,10 @@ class BatchEnsembleWhisperEncoderLayer(MemoryEfficientWhisperEncoderLayer):
     Improves by about 5% (1.75 -> 1.74 it/s)
     """
 
-    def __init__(self, config: WhisperConfig, n_ensembles=4):
+    def __init__(self, config: BatchEnsembleWhisperConfig):
         super().__init__()
         self.embed_dim = config.d_model
-        self.n_ensembles = n_ensembles
+        self.n_ensembles = config.n_ensembles
 
         self.self_attn = BATCH_ENSEMBLE_WHISPER_ATTENTION_CLASSES[config._attn_implementation](
             embed_dim=self.embed_dim,
@@ -65,7 +72,12 @@ class BatchEnsembleWhisperEncoderLayer(MemoryEfficientWhisperEncoderLayer):
 
     def check_input_dim(self, x):
 
-        pass
+        if self.training:
+            assert x.ndim == 3
+
+        else:
+            assert x.ndim == 4
+            assert x.size(0) == self.n_ensembles
 
     def forward(
             self,
@@ -85,6 +97,9 @@ class BatchEnsembleWhisperEncoderLayer(MemoryEfficientWhisperEncoderLayer):
                 Whether or not to return the attentions tensors of all attention layers. See `attentions` under
                 returned tensors for more detail.
         """
+
+        self.check_input_dim(hidden_states)
+
         residual = hidden_states
         hidden_states = self.self_attn_layer_norm(hidden_states)
         hidden_states, attn_weights, _ = self.self_attn(
@@ -126,22 +141,168 @@ class BatchEnsembleWhisperEncoderLayer(MemoryEfficientWhisperEncoderLayer):
         return outputs
 
 
+class BatchEnsembleWhisperDecoderLayer(WhisperDecoderLayer):
+    def __init__(self, config: BatchEnsembleWhisperConfig, layer_idx: int = None):
+        super().__init__()
+        self.embed_dim = config.d_model
+        self.n_ensembles = config.n_ensembles
+
+        self.self_attn = BATCH_ENSEMBLE_WHISPER_ATTENTION_CLASSES[config._attn_implementation](
+            embed_dim=self.embed_dim,
+            num_heads=config.decoder_attention_heads,
+            dropout=config.attention_dropout,
+            is_decoder=True,
+            is_causal=True,
+            layer_idx=layer_idx,
+            config=config,
+            n_ensembles=self.n_ensembles
+        )
+        self.dropout = config.dropout
+        self.activation_fn = ACT2FN[config.activation_function]
+        self.activation_dropout = config.activation_dropout
+
+        self.self_attn_layer_norm = nn.LayerNorm(self.embed_dim)
+        self.encoder_attn = BATCH_ENSEMBLE_WHISPER_ATTENTION_CLASSES[config._attn_implementation](
+            self.embed_dim,
+            config.decoder_attention_heads,
+            dropout=config.attention_dropout,
+            is_decoder=True,
+            layer_idx=layer_idx,
+            config=config,
+        )
+        self.encoder_attn_layer_norm = nn.LayerNorm(self.embed_dim)
+        self.fc1 = BatchEnsembleLinear(self.embed_dim, config.encoder_ffn_dim, self.n_ensembles)
+        self.fc2 = BatchEnsembleLinear(config.encoder_ffn_dim, self.embed_dim, self.n_ensembles)
+        self.final_layer_norm = nn.LayerNorm(self.embed_dim)
+
+    def check_input_dim(self, x):
+
+        if self.training:
+            assert x.ndim == 3
+
+        else:
+            assert x.ndim == 4
+            assert x.size(0) == self.n_ensembles
+
+    def forward(
+        self,
+        hidden_states: torch.Tensor,
+        attention_mask: Optional[torch.Tensor] = None,
+        encoder_hidden_states: Optional[torch.Tensor] = None,
+        encoder_attention_mask: Optional[torch.Tensor] = None,
+        layer_head_mask: Optional[torch.Tensor] = None,
+        cross_attn_layer_head_mask: Optional[torch.Tensor] = None,
+        past_key_value: Optional[EncoderDecoderCache] = None,
+        output_attentions: Optional[bool] = False,
+        use_cache: Optional[bool] = True,
+        cache_position: Optional[torch.LongTensor] = None,
+    ) -> torch.Tensor:
+        """
+        Args:
+            hidden_states (`torch.FloatTensor`): input to the layer of shape `(batch, seq_len, embed_dim)`
+            attention_mask (`torch.FloatTensor`): attention mask of size
+                `(batch, 1, tgt_len, src_len)` where padding elements are indicated by very large negative values.
+            encoder_hidden_states (`torch.FloatTensor`):
+                cross attention input to the layer of shape `(batch, seq_len, embed_dim)`
+            encoder_attention_mask (`torch.FloatTensor`): encoder attention mask of size
+                `(batch, 1, tgt_len, src_len)` where padding elements are indicated by very large negative values.
+            layer_head_mask (`torch.FloatTensor`): mask for attention heads in a given layer of size
+                `(encoder_attention_heads,)`.
+            cross_attn_layer_head_mask (`torch.FloatTensor`): mask for cross-attention heads in a given layer of
+                size `(decoder_attention_heads,)`.
+            past_key_value (`Tuple(torch.FloatTensor)`): cached past key and value projection states
+            output_attentions (`bool`, *optional*):
+                Whether or not to return the attentions tensors of all attention layers. See `attentions` under
+                returned tensors for more detail.
+        """
+
+        self.check_input_dim(hidden_states)
+        if encoder_hidden_states is not None:
+            self.check_input_dim(encoder_hidden_states)
+
+        residual = hidden_states
+        hidden_states = self.self_attn_layer_norm(hidden_states)
+
+        # Self Attention
+        hidden_states, self_attn_weights, present_key_value = self.self_attn(
+            hidden_states=hidden_states,
+            past_key_value=past_key_value,
+            attention_mask=attention_mask,
+            layer_head_mask=layer_head_mask,
+            output_attentions=output_attentions,
+            cache_position=cache_position,
+        )
+        hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
+        hidden_states = residual + hidden_states
+
+        # Cross-Attention Block
+        cross_attn_weights = None
+        if encoder_hidden_states is not None:
+            residual = hidden_states
+            hidden_states = self.encoder_attn_layer_norm(hidden_states)
+            hidden_states, cross_attn_weights, cross_attn_present_key_value = self.encoder_attn(
+                hidden_states=hidden_states,
+                key_value_states=encoder_hidden_states,
+                attention_mask=encoder_attention_mask,
+                layer_head_mask=cross_attn_layer_head_mask,
+                past_key_value=past_key_value,
+                output_attentions=output_attentions,
+            )
+            hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
+            hidden_states = residual + hidden_states
+
+            # add cross-attn to positions 1 of present_key_value tuple
+            present_key_value = (present_key_value, cross_attn_present_key_value)
+
+        # Fully Connected
+        residual = hidden_states
+        hidden_states = self.final_layer_norm(hidden_states)
+        hidden_states = self.activation_fn(self.fc1(hidden_states))
+        hidden_states = nn.functional.dropout(hidden_states, p=self.activation_dropout, training=self.training)
+        hidden_states = self.fc2(hidden_states)
+        hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
+        hidden_states = residual + hidden_states
+
+        outputs = (hidden_states,)
+
+        if output_attentions:
+            outputs += (self_attn_weights, cross_attn_weights)
+
+        if use_cache:
+            outputs += (present_key_value,)
+
+        return outputs
+
 
 from transformers import WhisperForConditionalGeneration
+from .memory_efficient_whisper import MemoryEfficientWhisper
+
+def calculate_lm_logits(logits):
+
+    assert logits.ndim == 4
+
+    probs = torch.nn.functional.softmax(logits, dim=-1, dtype=torch.float32)
+
+    probs = torch.mean(probs, dim=0)
+
+    logits = torch.log(probs) - torch.log(probs.max(dim=-1, keepdim=True))
+
+    return logits
 
 
-class BatchEnsembleWhisper(WhisperForConditionalGeneration):
+class BatchEnsembleWhisper(MemoryEfficientWhisper):
 
     """
     Uses fast xentropy loss during training (the loss computation is about 5x faster than pytorch)
     We need to replace
     """
-    def __init__(self, config):
+    def __init__(self, config: BatchEnsembleWhisperConfig):
         super().__init__(config)
         # TODO: add label smoothing during training
 
         self.teacher = None
         self.teacher_distillation = 0
+        self.n_ensembles = config.n_ensembles
 
     def forward(
             self,
@@ -165,34 +326,34 @@ class BatchEnsembleWhisper(WhisperForConditionalGeneration):
     ) -> Union[Tuple[torch.Tensor], Seq2SeqLMOutput]:
 
         r"""
-                labels (`torch.LongTensor` of shape `(batch_size, sequence_length)`, *optional*):
-                    Labels for computing the language modeling loss. Indices should either be in `[0, ..., config.vocab_size]`
-                    or -100 (see `input_ids` docstring). Tokens with indices set to `-100` are ignored (masked), the loss is
-                    only computed for the tokens with labels in `[0, ..., config.vocab_size]`. `sequence_length` should be smaller than or equal to `config.max_target_positions`.
+        labels (`torch.LongTensor` of shape `(batch_size, sequence_length)`, *optional*):
+            Labels for computing the language modeling loss. Indices should either be in `[0, ..., config.vocab_size]`
+            or -100 (see `input_ids` docstring). Tokens with indices set to `-100` are ignored (masked), the loss is
+            only computed for the tokens with labels in `[0, ..., config.vocab_size]`. `sequence_length` should be smaller than or equal to `config.max_target_positions`.
 
-                Returns:
+        Returns:
 
-                Example:
+        Example:
 
-                ```python
-                # >>> import torch
-                # >>> from transformers import AutoProcessor, WhisperForConditionalGeneration
-                # >>> from datasets import load_dataset
-                #
-                # >>> processor = AutoProcessor.from_pretrained("openai/whisper-tiny.en")
-                # >>> model = WhisperForConditionalGeneration.from_pretrained("openai/whisper-tiny.en")
-                #
-                # >>> ds = load_dataset("hf-internal-testing/librispeech_asr_dummy", "clean", split="validation")
-                #
-                # >>> inputs = processor(ds[0]["audio"]["array"], return_tensors="pt")
-                # >>> input_features = inputs.input_features
-                #
-                # >>> generated_ids = model.generate(inputs=input_features)
-                #
-                # >>> transcription = processor.batch_decode(generated_ids, skip_special_tokens=True)[0]
-                # >>> transcription
-                ' Mr. Quilter is the apostle of the middle classes, and we are glad to welcome his gospel.'
-                ```"""
+        ```python
+        # >>> import torch
+        # >>> from transformers import AutoProcessor, WhisperForConditionalGeneration
+        # >>> from datasets import load_dataset
+        #
+        # >>> processor = AutoProcessor.from_pretrained("openai/whisper-tiny.en")
+        # >>> model = WhisperForConditionalGeneration.from_pretrained("openai/whisper-tiny.en")
+        #
+        # >>> ds = load_dataset("hf-internal-testing/librispeech_asr_dummy", "clean", split="validation")
+        #
+        # >>> inputs = processor(ds[0]["audio"]["array"], return_tensors="pt")
+        # >>> input_features = inputs.input_features
+        #
+        # >>> generated_ids = model.generate(inputs=input_features)
+        #
+        # >>> transcription = processor.batch_decode(generated_ids, skip_special_tokens=True)[0]
+        # >>> transcription
+        ' Mr. Quilter is the apostle of the middle classes, and we are glad to welcome his gospel.'
+        ```"""
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
         if labels is not None:
@@ -230,6 +391,12 @@ class BatchEnsembleWhisper(WhisperForConditionalGeneration):
         else:
             teacher_lm_logits = None
 
+        if not self.training:
+            # TODO: if n_emsebles is too large we have OOM
+            n_ensembles = self.n_ensembles
+            input_features = input_features.unsqueeze(0).expand(n_ensembles, -1, -1, -1)
+            decoder_input_ids = decoder_input_ids.unsqueeze(0).expand(n_ensembles, -1, -1)
+
         outputs = self.model(
             input_features,
             attention_mask=attention_mask,
@@ -249,6 +416,10 @@ class BatchEnsembleWhisper(WhisperForConditionalGeneration):
             cache_position=cache_position,
         )
         lm_logits = self.proj_out(outputs[0])
+
+        if not self.training:
+
+            lm_logits = calculate_average_logits(lm_logits)
 
         loss = None
         ce_loss = None

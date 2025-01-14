@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Any, Mapping, Optional, Union
 
 from transformers.models.whisper.configuration_whisper import WhisperConfig
 
+
 class BatchEnsembleWhisperConfig(WhisperConfig):
 
     def __init__(self, n_ensembles=4, ensemble_init="ones", **kwargs):
@@ -26,4 +27,3 @@ class BatchEnsembleWhisperConfig(WhisperConfig):
 
         self.n_ensembles = n_ensembles
         self.ensemble_init = ensemble_init
-
