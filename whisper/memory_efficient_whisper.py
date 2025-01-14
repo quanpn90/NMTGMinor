@@ -424,7 +424,6 @@ def create_whisper_model(model_name, torch_dtype,
                          mem_efficient=True):
 
     # here model_name can be either the huggingface path, or the local path
-
     print("[INFO] Creating Whisper model from %s " % model_name)
     def replace_layer_with_weights(model, config):
         for i in range(len(model.model.encoder.layers)):
@@ -481,3 +480,29 @@ def create_whisper_model(model_name, torch_dtype,
     return model
 
 
+
+def create_batch_ensemble_from_whisper(model_name, torch_dtype,
+                                        attn_implementation="flash_attention_2",
+                                        low_cpu_mem_usage=False,
+                                        device_map="none",
+                                        mem_efficient=True):
+
+    # First we create a normal Whisper Model
+
+    whisper_model = create_whisper_model(model_name, torch_dtype, attn_implementation=attn_implementation,
+                                         low_cpu_mem_usage=low_cpu_mem_usage,
+                                         device_map=device_map,
+                                         mem_efficient=mem_efficient)
+
+    # Then we swap the
+
+
+    return model
+
+
+def create_batch_ensemble_from_scratch(model_name, torch_dtype,
+                                       attn_implementation="flash_attention_2",
+                                       low_cpu_mem_usage=False,
+                                       device_map="none",
+                                       mem_efficient=True):
+    return model
