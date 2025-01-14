@@ -277,7 +277,7 @@ class BatchEnsembleWhisperDecoderLayer(WhisperDecoderLayer):
 from transformers import WhisperForConditionalGeneration
 from .memory_efficient_whisper import MemoryEfficientWhisper
 
-def calculate_lm_logits(logits):
+def calculate_average_logits(logits):
 
     assert logits.ndim == 4
 
