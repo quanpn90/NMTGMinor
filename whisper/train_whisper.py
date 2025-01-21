@@ -36,6 +36,8 @@ from memory_efficient_whisper import (MemoryEfficientWhisper,
                                       MemoryEfficientLayerNorm,
                                       create_whisper_model)
 
+from batch_ensemble_whisper import create_batch_ensemble_whisper
+
 # Step 1: Parsing arguments
 
 parser = argparse.ArgumentParser(description='create_dataset_whisper')
@@ -100,6 +102,13 @@ parser.add_argument('-lr_scheduler', type=str, default="inv_sqrt",
 parser.add_argument('-dropout', type=float, default=0.0
                     , help='Dropout value of the model')
 
+parser.add_argument('-n_ensembles', type=int, default=1,
+                    help='Number of ensembles (for batch ensemble models)')
+parser.add_argument('-ensemble_init', type=str, default="random_sign",
+                    help='Initialization for batch ensemble weights: ["random_sign", "normal_one", "constant"')
+parser.add_argument('-freeze_params', action='store_true',
+                    help="Freeze all parmameters that are not from BatchEnsemble")
+
 args = parser.parse_args()
 
 # Step 2: Loading the generated dataset
@@ -129,7 +138,6 @@ for dataset_name in dataset_names:
         dataset = dataset.filter(filter_long_examples, num_proc=64)
 
     if args.check_audio_path:
-
         def filter_audio_path(example):
             # Ensure both input_ids and labels are within the max length
             # return len(example["input_ids"]) <= max_length and len(example["labels"]) <= max_length
@@ -157,10 +165,23 @@ checkpoint_path = args.checkpoint
 if checkpoint_path == "none":
     checkpoint_path = model_name
 
-# passing a device_map requires the low_cpu_mem_usage
-model = create_whisper_model(checkpoint_path, torch_dtype, attn_implementation="flash_attention_2",
-                             low_cpu_mem_usage=True,
-                             device_map={"": device})
+print("HELLO! Batch Ensemble", args.n_ensembles)
+
+if args.n_ensembles > 1:
+    model = create_batch_ensemble_whisper(checkpoint_path, torch_dtype, attn_implementation="flash_attention_2",
+                                          low_cpu_mem_usage=True,
+                                          device_map={"": device},
+                                          n_ensembles=args.n_ensembles, ensemble_init=args.ensemble_init,
+                                          freeze_params=args.freeze_params
+                                          )
+
+
+else:
+
+    # passing a device_map requires the low_cpu_mem_usage
+    model = create_whisper_model(checkpoint_path, torch_dtype, attn_implementation="flash_attention_2",
+                                 low_cpu_mem_usage=True,
+                                 device_map={"": device})
 
 if args.freeze_embedding:
     model.proj_out.weight.requires_grad = False
@@ -171,10 +192,10 @@ if args.freeze_embedding:
 if args.dropout > 0:
     model.config.dropout = args.dropout
 
-
 # Adjust model settings for fine-tuning
 model.config.forced_decoder_ids = None
 model.config.suppress_tokens = []
+model.config.use_cache = False  # importante
 
 if args.spec_augment:
     model.config.apply_spec_augment = True
@@ -282,7 +303,7 @@ elif args.optim == 'sgd':
                                     #           f"shadow_weights sum: {sw_sum}")
                                     #
                                     #     total += p.data.numel()
-                                        # print("---")
+                                    # print("---")
 
                                     self.shadow_weights[param_id].copy_(p.data)
 
@@ -296,10 +317,6 @@ elif args.optim == 'sgd':
     else:
         optimizer = optim_class(optimizer_grouped_parameters,
                                 lr=args.learning_rate)
-
-
-
-
 
 if args.lr_scheduler in ['inv_sqrt', 'noam']:
     def inverse_sqrt_scheduler(_optimizer, num_warmup_steps=1000):
@@ -329,8 +346,14 @@ if args.teacher_distillation > 0:
     # freeze the parameters for the teacher
     for param in teacher.parameters():
         param.requires_grad = False
+
+    teacher.config.forced_decoder_ids = None
+    teacher.config.suppress_tokens = []
+    teacher.config.use_cache = False  # importante
+
     model.teacher = teacher
     model.teacher_distillation = args.teacher_distillation
+
 else:
     teacher = None
 
@@ -452,57 +475,58 @@ callbacks = [ConsoleLoggingCallback()]
 update_count = 0
 ema_rate = args.ema_rate
 
-# if args.ema:
-    # class EMACallback(TrainerCallback):
-    #     def __init__(self, ema_rate=1.0):
-    #         """
-    #         Exponential averaging callback for weight updates.
-    #
-    #         Args:
-    #             ema_rate
-    #         """
-    #         # self.alpha_values = alpha_values  # Coefficients for exponential averaging
-    #         # self.ema_parameters = {name: param.clone().detach() for name, param in model.named_parameters() if param.requires_grad}
-    #         self.storage = {name: param.clone().detach() for name, param in model.named_parameters()}
-    #         self.ema_rate = ema_rate
-    #
-    #
-    #     def on_step_end(self, args, state: TrainerState, control: TrainerControl, model=None,
-    #                     optimizer=None, **kwargs):
-    #         """
-    #         Perform exponential averaging of weights after optimizer step.
-    #         """
-    #         # if self.alpha_values is None:
-    #         #     # Default alpha=0.9 for all parameter groups if not provided
-    #         #     self.alpha_values = [0.9] * len(optimizer.param_groups)
-    #
-    #         global update_count
-    #
-    #         update_count += 1
-    #         num_update = update_count
-    #
-    #         if num_update == 0:  # Prevent division by zero on the first step
-    #             return
-    #
-    #         # alpha = max(1 / num_update * args.ema_rate, 0.5)
-    #         # alpha = min(alpha, 0.99)
-    #         # alpha = 1 / num_update * self.ema_rate
-    #         #
-    #         # alpha = max(0.01, min(alpha, 0.5))
-    #         alpah
-    #
-    #         for name, param in model.named_parameters():
-    #
-    #             if param.requires_grad:
-    #                 with torch.no_grad():
-    #                     self.storage[name] = self.storage[name].to(param.device)
-    #                     param.data.mul_(alpha).add_(self.storage[name], alpha=1.0 - alpha)
-    #                     print(param.sum().item(), self.storage[name].sum().item())
-    #                     # Update the storage with the current weight
-    #                     self.storage[name].copy_(param.data)
 
-    # print("[INFO] Training the model with Exponential Moving Average SGD...")
-    # callbacks.append(EMACallback(ema_rate=ema_rate))
+# if args.ema:
+# class EMACallback(TrainerCallback):
+#     def __init__(self, ema_rate=1.0):
+#         """
+#         Exponential averaging callback for weight updates.
+#
+#         Args:
+#             ema_rate
+#         """
+#         # self.alpha_values = alpha_values  # Coefficients for exponential averaging
+#         # self.ema_parameters = {name: param.clone().detach() for name, param in model.named_parameters() if param.requires_grad}
+#         self.storage = {name: param.clone().detach() for name, param in model.named_parameters()}
+#         self.ema_rate = ema_rate
+#
+#
+#     def on_step_end(self, args, state: TrainerState, control: TrainerControl, model=None,
+#                     optimizer=None, **kwargs):
+#         """
+#         Perform exponential averaging of weights after optimizer step.
+#         """
+#         # if self.alpha_values is None:
+#         #     # Default alpha=0.9 for all parameter groups if not provided
+#         #     self.alpha_values = [0.9] * len(optimizer.param_groups)
+#
+#         global update_count
+#
+#         update_count += 1
+#         num_update = update_count
+#
+#         if num_update == 0:  # Prevent division by zero on the first step
+#             return
+#
+#         # alpha = max(1 / num_update * args.ema_rate, 0.5)
+#         # alpha = min(alpha, 0.99)
+#         # alpha = 1 / num_update * self.ema_rate
+#         #
+#         # alpha = max(0.01, min(alpha, 0.5))
+#         alpah
+#
+#         for name, param in model.named_parameters():
+#
+#             if param.requires_grad:
+#                 with torch.no_grad():
+#                     self.storage[name] = self.storage[name].to(param.device)
+#                     param.data.mul_(alpha).add_(self.storage[name], alpha=1.0 - alpha)
+#                     print(param.sum().item(), self.storage[name].sum().item())
+#                     # Update the storage with the current weight
+#                     self.storage[name].copy_(param.data)
+
+# print("[INFO] Training the model with Exponential Moving Average SGD...")
+# callbacks.append(EMACallback(ema_rate=ema_rate))
 
 
 # what happens if we have a list of dataset?

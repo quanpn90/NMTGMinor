@@ -26,11 +26,14 @@ from transformers.models.whisper.modeling_whisper import (WhisperAttention,
                                                           WhisperFlashAttention2,
                                                           WhisperSdpaAttention)
 
-from .batch_ensemble_linear import BatchEnsembleLinear
+from batch_ensemble_linear import BatchEnsembleLinear
 
 from transformers.cache_utils import Cache, DynamicCache, EncoderDecoderCache, StaticCache
 from transformers.models.whisper.configuration_whisper import WhisperConfig
+from transformers.utils import is_flash_attn_2_available, is_flash_attn_greater_or_equal_2_10, logging
 
+if is_flash_attn_2_available():
+    from transformers.modeling_flash_attention_utils import _flash_attention_forward
 
 def group_first_two_dims(x):
     if x.ndim < 2:
@@ -56,7 +59,7 @@ class BatchEnsembleWhisperAttention(WhisperAttention):
         config: Optional[WhisperConfig] = None,
         n_ensembles=4,
     ):
-        super().__init__()
+        torch.nn.Module.__init__(self)
         self.embed_dim = embed_dim
         self.num_heads = num_heads
         self.dropout = dropout
@@ -223,6 +226,13 @@ class BatchEnsembleWhisperFlashAttention2(BatchEnsembleWhisperAttention):
         # Beware that with flash_attn<2.1, using q_seqlen != k_seqlen (except for the case q_seqlen == 1) produces a wrong mask (top-left).
         self._flash_attn_uses_top_left_mask = not is_flash_attn_greater_or_equal_2_10()
 
+    def group_first_two_dim(self, tensor):
+
+        ens, batch_size = tensor.size(0), tensor.size(1)
+        new_shape = (ens * batch_size, *tensor.shape[2:])
+
+        return tensor.view(new_shape)
+
     def forward(
             self,
             hidden_states: torch.Tensor,
@@ -250,13 +260,21 @@ class BatchEnsembleWhisperFlashAttention2(BatchEnsembleWhisperAttention):
             n_ensembles = 1
         else:
             n_ensembles, bsz, tgt_len, _ = hidden_states.size()
-            assert n_ensembles == self.n_ensembles
+            assert n_ensembles == self.n_ensembles, f"Tensor has invalid shape: {hidden_states.size()}, while n_ensembles={self.n_ensembles}"
 
         # get query proj
+        # if not self.training and tgt_len == 1500:
+        #     print("Query states input: ", hidden_states.flatten()[:20])
+
+        query_states = self.q_proj(hidden_states)
+
+        # if not self.training and tgt_len == 1500:
+        #     print("Query states output: ", query_states.flatten()[:20])
+
         if self.training:
-            query_states = torch.reshape(self.q_proj(hidden_states), (bsz, tgt_len, self.num_heads, self.head_dim))
+            query_states = torch.reshape(query_states, (bsz, tgt_len, self.num_heads, self.head_dim))
         else:
-            query_states = torch.reshape(self.q_proj(hidden_states), (n_ensembles, bsz, tgt_len, self.num_heads, self))
+            query_states = torch.reshape(query_states, (n_ensembles, bsz, tgt_len, self.num_heads, self.head_dim))
 
         if past_key_value is not None:
             is_updated = past_key_value.is_updated.get(self.layer_idx)
@@ -289,11 +307,10 @@ class BatchEnsembleWhisperFlashAttention2(BatchEnsembleWhisperAttention):
             #     )
 
             # for the self-attention case
-
             key_states = self._shape(self.k_proj(current_states), -1, bsz)
             value_states = self._shape(self.v_proj(current_states), -1, bsz)
             if past_key_value is not None:
-                assert not training
+                assert not self.training or len(past_key_value) == 0
 
                 # save all key/value_states to cache to be re-used for fast auto-regressive generation
                 cache_position = cache_position if not is_cross_attention else None
@@ -311,11 +328,11 @@ class BatchEnsembleWhisperFlashAttention2(BatchEnsembleWhisperAttention):
         # TODO: These transpose are quite inefficient but Flash Attention requires the layout [batch_size, sequence_length, num_heads, head_dim]
         #  We would need to refactor the KV cache to be able to avoid many of these transpose/reshape/view.
         if self.training:
-            key_states = key_states.transpose(1, 2)
-            value_states = value_states.transpose(1, 2)
+            key_states = key_states.transpose(1, 2).contiguous()
+            value_states = value_states.transpose(1, 2).contiguous()
         else:
-            key_states = key_states.transpose(2, 3)
-            value_states = value_states.transpose(2, 3)
+            key_states = key_states.transpose(2, 3).contiguous()
+            value_states = value_states.transpose(2, 3).contiguous()
 
 
         causal_mask = attention_mask
@@ -326,9 +343,12 @@ class BatchEnsembleWhisperFlashAttention2(BatchEnsembleWhisperAttention):
                 causal_mask = causal_mask.unsqueeze(0)
 
         if not self.training:
-            query_states = query_states.flatten(0, 1)
-            value_states = value_states.flatten(0, 1)
-            key_states = key_states.flatten(0, 1)
+            #
+            # print(query_states.size(), value_states.size(), key_states.size())
+
+            query_states = self.group_first_two_dim(query_states)
+            value_states = self.group_first_two_dim(value_states)
+            key_states = self.group_first_two_dim(key_states)
 
         # In PEFT, usually we cast the layer norms in float32 for training stability reasons
         # therefore the input hidden states gets silently casted in float32. Hence, we need
@@ -356,6 +376,8 @@ class BatchEnsembleWhisperFlashAttention2(BatchEnsembleWhisperAttention):
             key_states = key_states.to(target_dtype)
             value_states = value_states.to(target_dtype)
 
+
+
         attn_output = _flash_attention_forward(
             query_states,
             key_states,
@@ -366,6 +388,8 @@ class BatchEnsembleWhisperFlashAttention2(BatchEnsembleWhisperAttention):
             is_causal=self.is_causal,
             use_top_left_mask=self._flash_attn_uses_top_left_mask,
         )
+        # if not self.training and tgt_len == 1500:
+        #     print("Self Attention output: ", attn_output.flatten()[:20])
 
         if self.training:
             attn_output = attn_output.reshape(bsz, tgt_len, -1)
@@ -448,7 +472,6 @@ class BatchEnsembleWhisperSdpaAttention(BatchEnsembleWhisperAttention):
         if is_cross_attention and past_key_value and is_updated:
 
             # first, assume that this doesn't happen during training
-            assert not self.training
 
             # reuse k,v, cross_attentions
             # the cache is rearranged during beam search by using the index 0 (batchxbeam dimension)
@@ -461,9 +484,6 @@ class BatchEnsembleWhisperSdpaAttention(BatchEnsembleWhisperAttention):
             key_states = self._shape(self.k_proj(current_states), -1, bsz)
             value_states = self._shape(self.v_proj(current_states), -1, bsz)
             if past_key_value is not None:
-
-                assert not training
-
                 # save all key/value_states to cache to be re-used for fast auto-regressive generation
                 cache_position = cache_position if not is_cross_attention else None
 

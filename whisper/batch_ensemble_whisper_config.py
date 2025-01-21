@@ -27,3 +27,33 @@ class BatchEnsembleWhisperConfig(WhisperConfig):
 
         self.n_ensembles = n_ensembles
         self.ensemble_init = ensemble_init
+
+    def to_dict(self):
+        base_dict = super().to_dict()
+        base_dict["n_ensembles"] = self.n_ensembles
+        base_dict["ensemble_init"] = self.ensemble_init
+
+        return base_dict
+
+    @classmethod
+    def from_whisper_config(cls, whisper_config: WhisperConfig,
+                            n_ensembles=1, ensemble_init="random_sign", **kwargs):
+        # Convert WhisperConfig to BatchEnsembleWhisperConfig
+        config_dict = whisper_config.to_dict()
+        config_dict["n_ensembles"] = n_ensembles  # Default or inferred value
+        config_dict["ensemble_init"] = ensemble_init  # Default or inferred value
+        return cls(**config_dict)
+
+
+def convert_to_whisper_config(config: BatchEnsembleWhisperConfig):
+    # Get the dictionary representation of the config
+    config_dict = config.to_dict()
+
+    # Remove additional BatchEnsemble-specific fields
+    whisper_config_dict = {
+        k: v for k, v in config_dict.items() if k not in {"n_ensembles", "ensemble_init"}
+    }
+
+    # Create a WhisperConfig from the filtered dictionary
+    whisper_config = WhisperConfig.from_dict(whisper_config_dict)
+    return whisper_config

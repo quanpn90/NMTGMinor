@@ -1,5 +1,6 @@
 from transformers import WhisperForConditionalGeneration
 from transformers.models.whisper.modeling_whisper import WhisperEncoderLayer
+from transformers.models.whisper.configuration_whisper import WhisperConfig
 
 import torch
 import torch.nn.functional as F
@@ -105,9 +106,9 @@ def _cast_if_autocast_enabled(*args):
         return args
     else:
         try:
-            return torch.cuda.amp.autocast_mode._cast(args, torch.get_autocast_gpu_dtype())
+            return torch.amp.autocast_mode._cast(args, 'cuda', torch.get_autocast_gpu_dtype())
         except AttributeError:
-            return torch.cuda.amp.autocast_mode._cast(args, torch.half)
+            return torch.amp.autocast_mode._cast(args, 'cuda', torch.half)
 
 
 def fast_layer_norm_affine(input, weight, bias, normalized_shape, eps=1e-5, memory_efficient=False):
@@ -230,23 +231,20 @@ class MemoryEfficientWhisperEncoderLayer(WhisperEncoderLayer):
         return outputs
 
 
-from .batch_ensemble_whisper_config import WhisperConfig, BatchEnsembleWhisperConfig
+# from .batch_ensemble_whisper_config import WhisperConfig, BatchEnsembleWhisperConfig
 
 
 class MemoryEfficientWhisper(WhisperForConditionalGeneration):
-
     """
     Uses fast xentropy loss during training (the loss computation is about 5x faster than pytorch)
     """
-    def __init__(self, config: Union[WhisperConfig, BatchEnsembleWhisperConfig]):
+
+    def __init__(self, config: WhisperConfig):
         super().__init__(config)
         # TODO: add label smoothing during training
 
         self.teacher = None
         self.teacher_distillation = 0
-
-        if isinstance(config, BatchEnsembleWhisperConfig):
-            self.n_ensembles = config.n_ensembles
 
     def forward(
             self,
@@ -382,8 +380,8 @@ class MemoryEfficientWhisper(WhisperForConditionalGeneration):
 
             if teacher_lm_logits is not None:
                 distilled_loss = torch.nn.functional.mse_loss(logits.view(-1, logits.size(-1)),
-                                                            teacher_lm_logits.view(-1, logits.size(-1)),
-                                                            reduction='none')
+                                                              teacher_lm_logits.view(-1, logits.size(-1)),
+                                                              reduction='none')
                 distilled_loss = distilled_loss.sum().div(bsz)
 
                 loss = ce_loss + self.teacher_distillation * distilled_loss
@@ -417,6 +415,7 @@ class MemoryEfficientWhisper(WhisperForConditionalGeneration):
         )
         return filtered_state_dict
 
+
 @dataclass
 class DistilledSeq2SeqLMOutput(Seq2SeqLMOutput):
     ce_loss: Optional[torch.FloatTensor] = None  # Add distillation_loss
@@ -428,9 +427,9 @@ def create_whisper_model(model_name, torch_dtype,
                          low_cpu_mem_usage=False,
                          device_map="none",
                          mem_efficient=True):
-
     # here model_name can be either the huggingface path, or the local path
     print("[INFO] Creating Whisper model from %s " % model_name)
+
     def replace_layer_with_weights(model, config):
         for i in range(len(model.model.encoder.layers)):
             old_layer = model.model.encoder.layers[i]
@@ -464,21 +463,21 @@ def create_whisper_model(model_name, torch_dtype,
                 # Recursively apply to submodules
                 replace_layernorm_with_memory_efficient(module)
 
-    whipser_class = MemoryEfficientWhisper if mem_efficient else WhisperForConditionalGeneration
+    whisper_class = MemoryEfficientWhisper if mem_efficient else WhisperForConditionalGeneration
 
     if device_map != "none":
-        model = whipser_class.from_pretrained(model_name,
-                                                       low_cpu_mem_usage=low_cpu_mem_usage,
-                                                       torch_dtype=torch_dtype,
-                                                       attn_implementation=attn_implementation,
-                                                       device_map=device_map,
-                                                       )
+        model = whisper_class.from_pretrained(model_name,
+                                              low_cpu_mem_usage=low_cpu_mem_usage,
+                                              torch_dtype=torch_dtype,
+                                              attn_implementation=attn_implementation,
+                                              device_map=device_map,
+                                              )
     else:
-        model = whipser_class.from_pretrained(model_name,
-                                                       low_cpu_mem_usage=low_cpu_mem_usage,
-                                                       torch_dtype=torch_dtype,
-                                                       attn_implementation=attn_implementation
-                                                       )
+        model = whisper_class.from_pretrained(model_name,
+                                              low_cpu_mem_usage=low_cpu_mem_usage,
+                                              torch_dtype=torch_dtype,
+                                              attn_implementation=attn_implementation
+                                              )
     if mem_efficient:
         replace_layer_with_weights(model, model.config)
         replace_layernorm_with_memory_efficient(model)
@@ -487,28 +486,3 @@ def create_whisper_model(model_name, torch_dtype,
 
 
 
-def create_batch_ensemble_from_whisper(model_name, torch_dtype,
-                                        attn_implementation="flash_attention_2",
-                                        low_cpu_mem_usage=False,
-                                        device_map="none",
-                                        mem_efficient=True):
-
-    # First we create a normal Whisper Model
-
-    whisper_model = create_whisper_model(model_name, torch_dtype, attn_implementation=attn_implementation,
-                                         low_cpu_mem_usage=low_cpu_mem_usage,
-                                         device_map=device_map,
-                                         mem_efficient=mem_efficient)
-
-    # Then we swap the
-
-
-    return model
-
-
-def create_batch_ensemble_from_scratch(model_name, torch_dtype,
-                                       attn_implementation="flash_attention_2",
-                                       low_cpu_mem_usage=False,
-                                       device_map="none",
-                                       mem_efficient=True):
-    return model

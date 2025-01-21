@@ -3,34 +3,32 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
-class BatchEnsembleLinear(nn.Module):
+class BatchEnsembleLinear(nn.Linear):
     import torch
     import torch.nn as nn
     import torch.nn.functional as F
 
-    class BatchEnsembleLinear(nn.Linear):
-        def __init__(self, in_features, out_features, num_ensembles,
-                     bias=True, device=None, dtype=None,
-                     init='constant'):
-            # Initialize nn.Linear
-            super(BatchEnsembleLinear, self).__init__(in_features, out_features, bias=bias, device=device, dtype=dtype)
-            self.num_ensembles = num_ensembles
+    def __init__(self, in_features, out_features, num_ensembles, bias=True, device=None, dtype=None,
+                 init='random_sign'):
+        # Ensure all arguments are properly passed to nn.Linear
+        super().__init__(in_features, out_features, bias=bias, device=device, dtype=dtype)
+        self.num_ensembles = num_ensembles
 
-            # Rank-1 factors for each ensemble member
-            factory_kwargs = {"device": device, "dtype": dtype}
-            self.r = nn.Parameter(torch.empty(num_ensembles, out_features, **factory_kwargs))  # Output modulation
-            self.s = nn.Parameter(torch.empty(num_ensembles, in_features, **factory_kwargs))  # Input modulation
+        # Rank-1 factors for each ensemble member
+        factory_kwargs = {"device": device, "dtype": dtype}
+        self.r = nn.Parameter(torch.empty(num_ensembles, out_features, **factory_kwargs))  # Output modulation
+        self.s = nn.Parameter(torch.empty(num_ensembles, in_features, **factory_kwargs))  # Input modulation
 
-            # Initialize modulation parameters
-            self.init_method = init
-            self.reset_modulation_parameters()
+        # Initialize modulation parameters
+        self.init_method = init
+        self.reset_modulation_parameters()
+
 
     def reset_modulation_parameters(self):
         """
         Initializes the rank-1 modulation parameters (r and s).
 
         """
-
         if self.init_method == 'constant':
             nn.init.constant_(self.r, 1.0)
             nn.init.constant_(self.s, 1.0)
@@ -41,16 +39,15 @@ class BatchEnsembleLinear(nn.Module):
             nn.init.constant_(self.r, 1.)
             nn.init.constant_(self.s, 1.)
             with torch.no_grad():
-                alpha_coeff = torch.randint_like(self.alpha, low=0, high=2)
+                alpha_coeff = torch.randint_like(self.r, low=0, high=2)
                 alpha_coeff.mul_(2).add_(-1)
-                gamma_coeff = torch.randint_like(self.gamma, low=0, high=2)
+                gamma_coeff = torch.randint_like(self.s, low=0, high=2)
                 gamma_coeff.mul_(2).add_(-1)
 
                 self.r *= alpha_coeff
-                self.gamma *= gamma_coeff
-
-        # nn.init.normal_(self.r, mean=0, std=0.1)
-        # nn.init.normal_(self.s, mean=0, std=0.1)
+                self.s *= gamma_coeff
+        else:
+            raise NotImplementedError
 
     def __repr__(self):
         return (
@@ -60,8 +57,8 @@ class BatchEnsembleLinear(nn.Module):
             f"num_ensembles={self.num_ensembles})"
         )
 
-    def forward(self, x, training=True):
-        if training:
+    def forward(self, x):
+        if self.training:
             # Training input: [batch_size, length, hidden_size]
             batch_size, length, hidden_size = x.shape
 
@@ -79,7 +76,10 @@ class BatchEnsembleLinear(nn.Module):
 
             # Apply shared linear transformation and modulation
             shared_output = F.linear(modulated_x, self.weight)  # Shape: [batch_size, length, out_features]
-            return shared_output * modulated_r + self.bias
+
+            modulated_output = shared_output * modulated_r
+
+            return modulated_output + self.bias if self.bias is not None else modulated_output
 
         else:
             # Testing input: [num_ensembles, batch_size, length, hidden_size]
@@ -90,9 +90,13 @@ class BatchEnsembleLinear(nn.Module):
                     f"Expected num_ensembles={self.num_ensembles}, but got {num_ensembles}."
                 )
 
+            # print(self.r)
+
             # Expand r and s for broadcasting
             r_expanded = self.r.unsqueeze(1).unsqueeze(1)  # Shape: [num_ensembles, 1, 1, out_features]
             s_expanded = self.s.unsqueeze(1).unsqueeze(1)  # Shape: [num_ensembles, 1, 1, in_features]
+
+            # print(r_expanded, s_expanded)
 
             # Modulate input and apply shared weights
             modulated_x = x * s_expanded  # Shape: [num_ensembles, batch_size, length, in_features]
@@ -100,6 +104,6 @@ class BatchEnsembleLinear(nn.Module):
                                      self.weight)  # Shape: [num_ensembles, batch_size, length, out_features]
 
             # Modulate output and return mean over ensembles
-            modulated_output = shared_output * r_expanded + self.bias
+            modulated_output = shared_output * r_expanded
             # Shape: [num_ensembles, batch_size, length, out_features]
-            return modulated_output
+            return modulated_output + self.bias if self.bias is not None else modulated_output
