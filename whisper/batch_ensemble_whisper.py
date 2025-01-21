@@ -1033,11 +1033,14 @@ class BatchEnsembleWhisperForConditionalGeneration(MemoryEfficientWhisper):
 
         # note: the model might be created on a meta device
         # so after loading the parameters with from_pretrained, we need to call them here
+        print("Post-loading weights... with init_weights ", init_weights)
 
         if init_weights:
+            print("Initializing the batch ensemble weights...")
             for module in self.modules():  # Iterate over all submodules
                 if isinstance(module, BatchEnsembleLinear):  # Check if it's a BatchEnsembleLinear layer
                     module.reset_modulation_parameters()  # Call the method
+                        # print(module.s)
 
 
 def create_batch_ensemble_whisper(model_name, torch_dtype,

@@ -29,25 +29,30 @@ class BatchEnsembleLinear(nn.Linear):
         Initializes the rank-1 modulation parameters (r and s).
 
         """
-        if self.init_method == 'constant':
-            nn.init.constant_(self.r, 1.0)
-            nn.init.constant_(self.s, 1.0)
-        elif self.init_method == 'normal_one':
-            nn.init.normal_(self.r, mean=1., std=0.1)
-            nn.init.normal_(self.s, mean=1., std=0.1)
-        elif self.init_method == 'random_sign':
-            nn.init.constant_(self.r, 1.)
-            nn.init.constant_(self.s, 1.)
-            with torch.no_grad():
-                alpha_coeff = torch.randint_like(self.r, low=0, high=2)
-                alpha_coeff.mul_(2).add_(-1)
-                gamma_coeff = torch.randint_like(self.s, low=0, high=2)
-                gamma_coeff.mul_(2).add_(-1)
+        nn.init.normal_(self.r, mean=1., std=0.1)
+        nn.init.normal_(self.s, mean=1., std=0.1)
 
-                self.r *= alpha_coeff
-                self.s *= gamma_coeff
-        else:
-            raise NotImplementedError
+        # I use the init method from giannifranchi's LPBNN ...
+
+        # if self.init_method == 'constant':
+        #     nn.init.constant_(self.r, 1.0)
+        #     nn.init.constant_(self.s, 1.0)
+        # elif self.init_method == 'normal_one':
+        #     nn.init.normal_(self.r, mean=1., std=0.1)
+        #     nn.init.normal_(self.s, mean=1., std=0.1)
+        # elif self.init_method == 'random_sign':
+        #     nn.init.constant_(self.r, 1.)
+        #     nn.init.constant_(self.s, 1.)
+        #     with torch.no_grad():
+        #         alpha_coeff = torch.randint_like(self.r, low=0, high=2)
+        #         alpha_coeff.mul_(2).add_(-1)
+        #         gamma_coeff = torch.randint_like(self.s, low=0, high=2)
+        #         gamma_coeff.mul_(2).add_(-1)
+        #
+        #         self.r *= alpha_coeff
+        #         self.s *= gamma_coeff
+        # else:
+        #     raise NotImplementedError
 
     def __repr__(self):
         return (
@@ -84,8 +89,7 @@ class BatchEnsembleLinear(nn.Linear):
             # Apply shared linear transformation and modulation
             shared_output = F.linear(modulated_x, self.weight)  # Shape: [batch_size, length, out_features]
 
-            modulated_output = shared_output
-            modulated_output.mul_(modulated_r)
+            modulated_output = shared_output * modulated_r
 
             return modulated_output + self.bias if self.bias is not None else modulated_output
 

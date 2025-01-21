@@ -577,7 +577,8 @@ def continual_learning_single_trainer(model, datasets,
             output_dir=output_dir,  # Directory to save model checkpoints
             per_device_train_batch_size=args.batch_size,  # Adjust based on your GPU memory
             gradient_accumulation_steps=args.bsz_accumulate,  # Effective batch size multiplier
-            learning_rate=1e-5,
+            learning_rate=1e-5, # this value is ignored by the lr scheduler anyways
+            max_grad_norm=1.0,
             max_steps=args.max_steps,
             num_train_epochs=args.num_epoch,
             eval_strategy="steps",
@@ -586,7 +587,7 @@ def continual_learning_single_trainer(model, datasets,
             save_total_limit=5,  # Only keep the last two checkpoints
             logging_dir="./logs",
             predict_with_generate=True,
-            bf16=True,  # Use mixed precision training (if supported)
+            bf16=False,  # Use mixed precision training (if supported)
             remove_unused_columns=False,  # Prevent Trainer from removing necessary columns
             dataloader_num_workers=16,  # Number of workers for data loading
             ddp_find_unused_parameters=args.find_unused_parameters,
