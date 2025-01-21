@@ -93,6 +93,8 @@ parser.add_argument('-streaming', action='store_true',
                     help="Use exponential moving average during training")
 parser.add_argument('-freeze_embedding', action='store_true',
                     help="Use exponential moving average during training")
+parser.add_argument('-find_unused_parameters', action='store_true',
+                    help="Freeze all parmameters that are not from BatchEnsemble")
 
 parser.add_argument('-optim', type=str, default="adam",
                     help='Optimizer: ["adam", "rmsprop", "sgd".')
@@ -108,6 +110,11 @@ parser.add_argument('-ensemble_init', type=str, default="random_sign",
                     help='Initialization for batch ensemble weights: ["random_sign", "normal_one", "constant"')
 parser.add_argument('-freeze_params', action='store_true',
                     help="Freeze all parmameters that are not from BatchEnsemble")
+parser.add_argument('-init_be_params', action='store_true',
+                    help="Initialize the batch ensemble params (must have when training from scratch)")
+
+parser.add_argument('-evaluation_before_training', action='store_true',
+                    help="Run evaluation before training.")
 
 args = parser.parse_args()
 
@@ -172,7 +179,8 @@ if args.n_ensembles > 1:
                                           low_cpu_mem_usage=True,
                                           device_map={"": device},
                                           n_ensembles=args.n_ensembles, ensemble_init=args.ensemble_init,
-                                          freeze_params=args.freeze_params
+                                          freeze_params=args.freeze_params,
+                                          init_weights=args.init_be_params
                                           )
 
 
@@ -581,7 +589,7 @@ def continual_learning_single_trainer(model, datasets,
             bf16=True,  # Use mixed precision training (if supported)
             remove_unused_columns=False,  # Prevent Trainer from removing necessary columns
             dataloader_num_workers=16,  # Number of workers for data loading
-            ddp_find_unused_parameters=False,
+            ddp_find_unused_parameters=args.find_unused_parameters,
             # Enables FSDP with full sharding and auto-wrapping
             fsdp="full_shard auto_wrap" if args.fsdp else "",
             # Specify layers to wrap
@@ -600,8 +608,9 @@ def continual_learning_single_trainer(model, datasets,
             callbacks=callbacks
         )
 
-        # initial_metrics = trainer.evaluate()
-        # print(f"Initial Validation Metrics: {initial_metrics}")
+        if args.evaluation_before_training:
+            initial_metrics = trainer.evaluate()
+            print(f"Initial Validation Metrics: {initial_metrics}")
 
         print("[INFO] Start training on dataset %s" % dataset_name)
         trainer.train()

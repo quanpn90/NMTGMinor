@@ -58,6 +58,9 @@ class BatchEnsembleLinear(nn.Linear):
         )
 
     def forward(self, x):
+
+        # x = x.contiguous()
+
         if self.training:
             # Training input: [batch_size, length, hidden_size]
             batch_size, length, hidden_size = x.shape
@@ -66,18 +69,23 @@ class BatchEnsembleLinear(nn.Linear):
                 # Case 1: B == E; directly modulate with r and s
                 modulated_r = self.r.unsqueeze(1)  # Shape: [num_ensembles, 1, out_features]
                 modulated_s = self.s.unsqueeze(1)  # Shape: [num_ensembles, 1, in_features]
-                modulated_x = x * modulated_s  # Element-wise modulation
+
+                modulated_x = x * modulated_s
+                # modulated_x.mul_(modulated_s)  # Element-wise modulation
             else:
                 # Case 2: B != E; randomize ensemble assignments
                 ensemble_idx = torch.randint(0, self.num_ensembles, (batch_size,), device=x.device)
                 modulated_r = self.r[ensemble_idx].unsqueeze(1)  # Shape: [batch_size, 1, out_features]
                 modulated_s = self.s[ensemble_idx].unsqueeze(1)  # Shape: [batch_size, 1, in_features]
-                modulated_x = x * modulated_s  # Element-wise modulation
+
+                modulated_x = x * modulated_s
+                # modulated_x.mul_(modulated_s)  # Element-wise modulation
 
             # Apply shared linear transformation and modulation
             shared_output = F.linear(modulated_x, self.weight)  # Shape: [batch_size, length, out_features]
 
-            modulated_output = shared_output * modulated_r
+            modulated_output = shared_output
+            modulated_output.mul_(modulated_r)
 
             return modulated_output + self.bias if self.bias is not None else modulated_output
 
@@ -90,13 +98,9 @@ class BatchEnsembleLinear(nn.Linear):
                     f"Expected num_ensembles={self.num_ensembles}, but got {num_ensembles}."
                 )
 
-            # print(self.r)
-
             # Expand r and s for broadcasting
             r_expanded = self.r.unsqueeze(1).unsqueeze(1)  # Shape: [num_ensembles, 1, 1, out_features]
             s_expanded = self.s.unsqueeze(1).unsqueeze(1)  # Shape: [num_ensembles, 1, 1, in_features]
-
-            # print(r_expanded, s_expanded)
 
             # Modulate input and apply shared weights
             modulated_x = x * s_expanded  # Shape: [num_ensembles, batch_size, length, in_features]

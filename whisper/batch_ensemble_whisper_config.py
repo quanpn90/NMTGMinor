@@ -44,6 +44,17 @@ class BatchEnsembleWhisperConfig(WhisperConfig):
         config_dict["ensemble_init"] = ensemble_init  # Default or inferred value
         return cls(**config_dict)
 
+    @classmethod
+    def from_pretrained(cls, pretrained_model_name_or_path, **kwargs):
+        # Attempt to load the config as a BatchEnsembleWhisperConfig
+        try:
+            return super(BatchEnsembleWhisperConfig, cls).from_pretrained(pretrained_model_name_or_path, **kwargs)
+        except KeyError:
+            # Fall back to loading as WhisperConfig and converting
+            whisper_config = WhisperConfig.from_pretrained(pretrained_model_name_or_path, **kwargs)
+            print("Falling back to WhisperConfig and converting to BatchEnsembleWhisperConfig")
+            return cls.from_whisper_config(whisper_config)
+
 
 def convert_to_whisper_config(config: BatchEnsembleWhisperConfig):
     # Get the dictionary representation of the config

@@ -973,18 +973,25 @@ class BatchEnsembleWhisperForConditionalGeneration(MemoryEfficientWhisper):
                         init_weights=False,
                         **kwargs):
 
-        config = kwargs.pop("config", None) or WhisperConfig.from_pretrained(pretrained_model_name_or_path, **kwargs)
+        config = (kwargs.pop("config", None) or
+                  BatchEnsembleWhisperConfig.from_pretrained(pretrained_model_name_or_path, **kwargs))
 
         # If it's a WhisperConfig, convert it to BatchEnsembleWhisperConfig
         if isinstance(config, WhisperConfig) and not isinstance(config, BatchEnsembleWhisperConfig):
             config = BatchEnsembleWhisperConfig.from_whisper_config(config, n_ensembles=n_ensembles,
                                                                     ensemble_init=ensemble_init)
 
+            if not init_weights:
+                print("[INFO] Initializing BE Weights is set to False, "
+                      "but model is trained from scratch! "
+                      "The BE weights will be initialized properly to avoid empty tensors.")
+                init_weights = True
+
         # Call the base class's from_pretrained method with the updated config
         kwargs["config"] = config
         model, loading_info = super().from_pretrained(pretrained_model_name_or_path, *model_args,
-                                        output_loading_info=True,  # Ensure loading info is returned,
-                                        **kwargs)
+                                                      output_loading_info=True,  # Ensure loading info is returned,
+                                                      **kwargs)
 
         # Extract missing keys (newly initialized weights)
         missing_keys = loading_info.get("missing_keys", [])
@@ -993,40 +1000,44 @@ class BatchEnsembleWhisperForConditionalGeneration(MemoryEfficientWhisper):
         print(f"Unexpected keys in the checkpoint: {unexpected_keys}")
 
         if freeze_params:
-
-            unfreeze_list = ['model.encoder.conv1.weight', 'model.encoder.conv1.bias',
-                             'model.encoder.conv2.weight', 'model.encoder.conv2.bias',
-                             'model.encoder.embed_positions.weight']
-
             freezing_keys = ['attn', '.fc', 'layer_norm', 'conv']
 
             # Optionally, freeze weights not in the missing_keys list
             for name, param in model.named_parameters():
                 if name not in missing_keys:
 
-                    freeze = False
-                    for key in freezing_keys:
-                        if key in name:
-                            freeze = True; break
+                    # don't freeze the batch ensemble weights
+                    if name.endswith(".r") or name.endswith(".s"):
+                        param.requires_grad = True
 
-                    if freeze:
-
-                        param.requires_grad = False
                     else:
-                        print("Un-Freezing param.... ", name)
+                        freeze = False
+                        for key in freezing_keys:
+                            if key in name:
+                                freeze = True;
+                                break
+
+                        if freeze:
+
+                            param.requires_grad = False
+                        else:
+                            print("Un-Freezing param.... ", name)
 
         # Perform any additional setup if needed (e.g., initializing new BatchEnsemble parameters)
+        # self.post_load_setup(init_weights=init_weights)
+        model.post_load_setup(init_weights=init_weights)
 
         return model
 
-    def post_load_setup(self):
+    def post_load_setup(self, init_weights=False):
 
         # note: the model might be created on a meta device
         # so after loading the parameters with from_pretrained, we need to call them here
 
-        for module in model.modules():  # Iterate over all submodules
-            if isinstance(module, BatchEnsembleLinear):  # Check if it's a BatchEnsembleLinear layer
-                module.reset_modulation_parameters()  # Call the method
+        if init_weights:
+            for module in self.modules():  # Iterate over all submodules
+                if isinstance(module, BatchEnsembleLinear):  # Check if it's a BatchEnsembleLinear layer
+                    module.reset_modulation_parameters()  # Call the method
 
 
 def create_batch_ensemble_whisper(model_name, torch_dtype,
@@ -1036,7 +1047,8 @@ def create_batch_ensemble_whisper(model_name, torch_dtype,
                                   mem_efficient=True,
                                   n_ensembles=1,
                                   freeze_params=False,
-                                  ensemble_init="random_sign"):
+                                  ensemble_init="random_sign",
+                                  init_weights=False):
     # First we create a normal Whisper Model
 
     whisper_class = BatchEnsembleWhisperForConditionalGeneration
@@ -1048,7 +1060,8 @@ def create_batch_ensemble_whisper(model_name, torch_dtype,
                                               attn_implementation=attn_implementation,
                                               device_map=device_map,
                                               n_ensembles=n_ensembles, ensemble_init=ensemble_init,
-                                              freeze_params=freeze_params
+                                              freeze_params=freeze_params,
+                                              init_weights=init_weights
                                               )
     else:
         model = whisper_class.from_pretrained(model_name,
@@ -1056,7 +1069,8 @@ def create_batch_ensemble_whisper(model_name, torch_dtype,
                                               torch_dtype=torch_dtype,
                                               attn_implementation=attn_implementation,
                                               n_ensembles=n_ensembles, ensemble_init=ensemble_init,
-                                              freeze_params=freeze_params
+                                              freeze_params=freeze_params,
+                                              init_weights=init_weights
                                               )
 
     return model
