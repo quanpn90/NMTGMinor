@@ -922,6 +922,7 @@ class BatchEnsembleWhisperForConditionalGeneration(MemoryEfficientWhisper):
                 loss = loss.sum().div(bsz)
                 ce_loss = loss
             else:
+
                 loss_fct = CrossEntropyLoss(ignore_index=-100,
                                             reduction='mean',
                                             label_smoothing=0.0)
