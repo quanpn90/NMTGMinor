@@ -175,7 +175,8 @@ if checkpoint_path == "none":
 print("HELLO! Batch Ensemble", args.n_ensembles)
 
 if args.n_ensembles > 1:
-    model = create_batch_ensemble_whisper(checkpoint_path, torch_dtype, attn_implementation="flash_attention_2",
+    model = create_batch_ensemble_whisper(checkpoint_path, torch_dtype,
+                                          attn_implementation="flash_attention_2",
                                           low_cpu_mem_usage=True,
                                           device_map={"": device},
                                           n_ensembles=args.n_ensembles, ensemble_init=args.ensemble_init,
@@ -187,7 +188,8 @@ if args.n_ensembles > 1:
 else:
 
     # passing a device_map requires the low_cpu_mem_usage
-    model = create_whisper_model(checkpoint_path, torch_dtype, attn_implementation="flash_attention_2",
+    model = create_whisper_model(checkpoint_path, torch_dtype,
+                                 attn_implementation="flash_attention_2",
                                  low_cpu_mem_usage=True,
                                  device_map={"": device})
 
@@ -249,7 +251,6 @@ if args.optim in ['adam', 'adamw']:
                                 betas=betas)
 
 
-
 elif args.optim == 'sgd':
 
     optim_class = torch.optim.SGD
@@ -261,7 +262,8 @@ elif args.optim == 'sgd':
                 super().__init__(params, **kwargs)
                 self.ema_rate = ema_rate
                 self.counter = 0
-                # self.shadow_weights = {id(p): p.clone().detach() for group in self.param_groups for p in group['params']}
+                # self.shadow_weights = {id(p): p.clone().detach() for group in self.param_groups for p in group[
+                # 'params']}
                 self.shadow_weights = dict()
 
                 for group in self.param_groups:
@@ -577,7 +579,7 @@ def continual_learning_single_trainer(model, datasets,
             output_dir=output_dir,  # Directory to save model checkpoints
             per_device_train_batch_size=args.batch_size,  # Adjust based on your GPU memory
             gradient_accumulation_steps=args.bsz_accumulate,  # Effective batch size multiplier
-            learning_rate=1e-5, # this value is ignored by the lr scheduler anyways
+            learning_rate=1e-5,  # this value is ignored by the lr scheduler anyways
             max_grad_norm=1.0,
             max_steps=args.max_steps,
             num_train_epochs=args.num_epoch,

@@ -166,15 +166,19 @@ def load_asr_dataset(file_path, language):
             uid, wavpath, start, end, duration = parts[:5]
             transcript = " ".join(parts[5:])
 
-        if "/" not in wavpath: skipped += 1; continue
+        if "/" not in wavpath:
+            skipped += 1;
+            continue
         # if not os.path.exists(wavpath): skipped +=1; continue
 
-        duration = float(duration)  #ms
+        duration = float(duration)  # ms
         if duration < 500 or duration > 20000: skipped += 1; continue
 
-        #transcript = normalize_text(transcript, language[0])
         transcript = remove_special_characters(transcript)
-        if transcript.strip() == "": skipped += 1; continue
+        if transcript.strip() == "":
+            skipped += 1
+            continue
+
         transcript = " ".join(transcript.split())
 
         language_str = ",".join(language)
@@ -327,45 +331,105 @@ def do_csw_backup(train_list, pseudo_csw_amount, train=True):
     pbar.close()
     return csw_dataset
 
+#
+# def get_data(debug=False):
+#     datasets = {}
+#
+#     # Iterate over all directories in the current working directory
+#     for dir_name in os.listdir('../../../../repos/tmp'):
+#         print(f"Loading {dir_name} ...")
+#         # Check if it's a directory and ends with "..data"
+#         if os.path.isdir(dir_name) and dir_name.endswith(".data"):
+#             # Define the two files we need to load
+#             all_tr_file = os.path.join(dir_name, "all-tr.stm")
+#             small_dev_file = os.path.join(dir_name, "small-dev.stm")
+#
+#             # Check if the files exist in the directory
+#             if os.path.isfile(all_tr_file) and os.path.isfile(small_dev_file):
+#                 # Load the datasets using the hypothetical load_asr_dataset function
+#                 all_tr_dataset = load_asr_dataset(all_tr_file, "def").shuffle(seed=42)
+#                 small_dev_dataset = load_asr_dataset(small_dev_file, "def")
+#
+#                 # Use directory name and file name to create keys for the dictionary
+#                 datasets[f"{dir_name}_all-tr"] = all_tr_dataset
+#                 datasets[f"{dir_name}_small-dev"] = small_dev_dataset
+#
+#     dev_list = [v for k, v in datasets.items() if "_small-dev" in k]
+#     datasets = {k: v for k, v in datasets.items() if "_small-dev" not in k}
+#     #    dev_list = list()
+#     #    for k in datasets.keys():
+#     #        if "_small-dev" in k:
+#     #            dev_list.append(datasets[k])
+#     #            del datasets[k]
+#
+#     #  datasets = {}
+#
+#     #  print("Loading ARZEN...")
+#     #  arzen_train="/project/asr_systems/LT2022/codeswitching/data/ARX-ENG/arzen/ArzEn_SpeechCorpus_1.0/train-clip-ntags.stm"
+#     #  arzen_dev = "/project/asr_systems/LT2022/codeswitching/data/ARX-ENG/arzen/ArzEn_SpeechCorpus_1.0/dev-clip-ntags.stm"
+#     #  shuffle_arzen_train_dataset = load_asr_dataset(arzen_train, "ar").shuffle(seed=42)
+#     #  arzen_train_dataset = load_asr_dataset(arzen_train, "ar")
+#     #  arzen_dev_dataset = load_asr_dataset(arzen_dev, "ar")
+#
+#     print("Loading SEAME...")
+#     seame_train = "/project/asr_systems/LT2022/codeswitching/data/CMN-ENG/seame/train_clip.stm"
+#     seame_train_dataset = load_asr_dataset(seame_train, "def")
+#     tmp = seame_train_dataset.train_test_split(test_size=3000)
+#     seame_train_dataset = tmp["train"]
+#     seame_dev_dataset = tmp["test"]
+#     shuffle_seame_train_dataset = seame_train_dataset.shuffle(seed=42)
+#
+#     dev_list.append(seame_dev_dataset)
+#     #  print("Loadin ASCEND ...")
+#     #  ascend_train="/project/asr_systems/LT2022/codeswitching/data/CMN-ENG/ASCEND/train_notags.stm"
+#     #  ascend_dev="/project/asr_systems/LT2022/codeswitching/data/CMN-ENG/ASCEND/dev_notags.stm"
+#     #  ascend_train_dataset = load_asr_dataset(ascend_train, "def").shuffle(seed=42)
+#     #  ascend_dev_dataset = load_asr_dataset(ascend_dev, "def")
+#
+#     print("Loading Fisher...")
+#     fisher_train = "/project/asr_systems/LT2022/codeswitching/data/ESP-ENG/fisher/fisher_train_cs_train-transcript.stm"
+#     fisher_dev = "/project/asr_systems/LT2022/codeswitching/data/ESP-ENG/fisher/fisher_train_cs_dev-transcript.stm"
+#     shuffle_fisher_train_dataset = load_asr_dataset(fisher_train, "es").shuffle(seed=42)
+#     fisher_train_dataset = load_asr_dataset(fisher_train, "es")
+#     fisher_dev_dataset = load_asr_dataset(fisher_dev, "es")
+#
+#     fisher_mono_train = "/project/asr_systems/LT2022/codeswitching/data/ESP-ENG/fisher/fisher_train_mono-transcript.stm"
+#     shuffle_fisher_mono_train_dataset = load_asr_dataset(fisher_mono_train, "es").shuffle(seed=42)
+#
+#     fisher_all_train_dataset = concatenate_datasets([shuffle_fisher_train_dataset, shuffle_fisher_mono_train_dataset])
+#
+#     #  print("Loading TALCS ...")
+#     #  talcs_train = "/project/asr_systems/LT2022/codeswitching/data/CMN-ENG/TALCS_corpus/train_set/train_time.stm"
+#     #  talcs_dev = "/project/asr_systems/LT2022/codeswitching/data/CMN-ENG/TALCS_corpus/dev_set/dev_time.stm"
+#     #  talcs_train_dataset = load_asr_dataset(talcs_train, "def").shuffle(seed=42)
+#     #  talcs_dev_dataset = load_asr_dataset(talcs_dev, "def")
+#
+#     # csw_train_dataset = concatenate_datasets([shuffle_arzen_train_dataset, shuffle_seame_train_dataset, ascend_train_dataset, shuffle_fisher_train_dataset])
+#     # csw_dev_dataset = concatenate_datasets([arzen_dev_dataset, seame_dev_dataset, ascend_dev_dataset, fisher_dev_dataset])
+#
+#     datasets["csw_train_dataset"] = fisher_all_train_dataset  #csw_train_dataset
+#     datasets["shuffle_seame_train_dataset"] = shuffle_seame_train_dataset
+#     #datasets["talcs_train_dataset"] = talcs_train_dataset
+#
+#     # dev_list.append(csw_dev_dataset)
+#     #dev_list.append(talcs_dev_dataset)
+#     dev_list.append(fisher_dev_dataset)
+#     all_dev_dataset = concatenate_datasets(dev_list)
+#
+#     print(datasets)
+#     print("===" * 20)
+#     print(dev_list)
+#
+#     print("=====")
+#     print(f"Dev data: {all_dev_dataset}")
+#
+#     return datasets, all_dev_dataset, fisher_dev_dataset
 
-def get_data(debug=False):
+
+def get_data_seame(debug=False):
     datasets = {}
 
-    # Iterate over all directories in the current working directory
-    for dir_name in os.listdir('../../../../repos/tmp'):
-        print(f"Loading {dir_name} ...")
-        # Check if it's a directory and ends with "..data"
-        if os.path.isdir(dir_name) and dir_name.endswith(".data"):
-            # Define the two files we need to load
-            all_tr_file = os.path.join(dir_name, "all-tr.stm")
-            small_dev_file = os.path.join(dir_name, "small-dev.stm")
-
-            # Check if the files exist in the directory
-            if os.path.isfile(all_tr_file) and os.path.isfile(small_dev_file):
-                # Load the datasets using the hypothetical load_asr_dataset function
-                all_tr_dataset = load_asr_dataset(all_tr_file, "def").shuffle(seed=42)
-                small_dev_dataset = load_asr_dataset(small_dev_file, "def")
-
-                # Use directory name and file name to create keys for the dictionary
-                datasets[f"{dir_name}_all-tr"] = all_tr_dataset
-                datasets[f"{dir_name}_small-dev"] = small_dev_dataset
-
-    dev_list = [v for k, v in datasets.items() if "_small-dev" in k]
-    datasets = {k: v for k, v in datasets.items() if "_small-dev" not in k}
-    #    dev_list = list()
-    #    for k in datasets.keys():
-    #        if "_small-dev" in k:
-    #            dev_list.append(datasets[k])
-    #            del datasets[k]
-
-    #  datasets = {}
-
-    #  print("Loading ARZEN...")
-    #  arzen_train="/project/asr_systems/LT2022/codeswitching/data/ARX-ENG/arzen/ArzEn_SpeechCorpus_1.0/train-clip-ntags.stm"
-    #  arzen_dev = "/project/asr_systems/LT2022/codeswitching/data/ARX-ENG/arzen/ArzEn_SpeechCorpus_1.0/dev-clip-ntags.stm"
-    #  shuffle_arzen_train_dataset = load_asr_dataset(arzen_train, "ar").shuffle(seed=42)
-    #  arzen_train_dataset = load_asr_dataset(arzen_train, "ar")
-    #  arzen_dev_dataset = load_asr_dataset(arzen_dev, "ar")
+    dev_list = list()
 
     print("Loading SEAME...")
     seame_train = "/project/asr_systems/LT2022/codeswitching/data/CMN-ENG/seame/train_clip.stm"
@@ -373,43 +437,10 @@ def get_data(debug=False):
     tmp = seame_train_dataset.train_test_split(test_size=3000)
     seame_train_dataset = tmp["train"]
     seame_dev_dataset = tmp["test"]
-    shuffle_seame_train_dataset = seame_train_dataset.shuffle(seed=42)
+    shuffle_seame_train_dataset = seame_train_dataset.shuffle(seed=181195)
 
     dev_list.append(seame_dev_dataset)
-    #  print("Loadin ASCEND ...")
-    #  ascend_train="/project/asr_systems/LT2022/codeswitching/data/CMN-ENG/ASCEND/train_notags.stm"
-    #  ascend_dev="/project/asr_systems/LT2022/codeswitching/data/CMN-ENG/ASCEND/dev_notags.stm"
-    #  ascend_train_dataset = load_asr_dataset(ascend_train, "def").shuffle(seed=42)
-    #  ascend_dev_dataset = load_asr_dataset(ascend_dev, "def")
 
-    print("Loading Fisher...")
-    fisher_train = "/project/asr_systems/LT2022/codeswitching/data/ESP-ENG/fisher/fisher_train_cs_train-transcript.stm"
-    fisher_dev = "/project/asr_systems/LT2022/codeswitching/data/ESP-ENG/fisher/fisher_train_cs_dev-transcript.stm"
-    shuffle_fisher_train_dataset = load_asr_dataset(fisher_train, "es").shuffle(seed=42)
-    fisher_train_dataset = load_asr_dataset(fisher_train, "es")
-    fisher_dev_dataset = load_asr_dataset(fisher_dev, "es")
-
-    fisher_mono_train = "/project/asr_systems/LT2022/codeswitching/data/ESP-ENG/fisher/fisher_train_mono-transcript.stm"
-    shuffle_fisher_mono_train_dataset = load_asr_dataset(fisher_mono_train, "es").shuffle(seed=42)
-
-    fisher_all_train_dataset = concatenate_datasets([shuffle_fisher_train_dataset, shuffle_fisher_mono_train_dataset])
-
-    #  print("Loading TALCS ...")
-    #  talcs_train = "/project/asr_systems/LT2022/codeswitching/data/CMN-ENG/TALCS_corpus/train_set/train_time.stm"
-    #  talcs_dev = "/project/asr_systems/LT2022/codeswitching/data/CMN-ENG/TALCS_corpus/dev_set/dev_time.stm"
-    #  talcs_train_dataset = load_asr_dataset(talcs_train, "def").shuffle(seed=42)
-    #  talcs_dev_dataset = load_asr_dataset(talcs_dev, "def")
-
-    # csw_train_dataset = concatenate_datasets([shuffle_arzen_train_dataset, shuffle_seame_train_dataset, ascend_train_dataset, shuffle_fisher_train_dataset])
-    # csw_dev_dataset = concatenate_datasets([arzen_dev_dataset, seame_dev_dataset, ascend_dev_dataset, fisher_dev_dataset])
-
-    datasets["csw_train_dataset"] = fisher_all_train_dataset  #csw_train_dataset
-    datasets["shuffle_seame_train_dataset"] = shuffle_seame_train_dataset
-    #datasets["talcs_train_dataset"] = talcs_train_dataset
-
-    # dev_list.append(csw_dev_dataset)
-    #dev_list.append(talcs_dev_dataset)
-    dev_list.append(fisher_dev_dataset)
     all_dev_dataset = concatenate_datasets(dev_list)
 
     print(datasets)
@@ -419,4 +450,4 @@ def get_data(debug=False):
     print("=====")
     print(f"Dev data: {all_dev_dataset}")
 
-    return datasets, all_dev_dataset, fisher_dev_dataset
+    return datasets, all_dev_dataset

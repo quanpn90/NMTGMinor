@@ -7,6 +7,8 @@ import re
 from transformers import WhisperFeatureExtractor, WhisperTokenizer, WhisperProcessor, WhisperForConditionalGeneration, \
     AutoProcessor, AutoTokenizer, SeamlessM4TForSpeechToText, EarlyStoppingCallback, SeamlessM4Tv2ForSpeechToText
 from transformers import Seq2SeqTrainingArguments, SpeechEncoderDecoderConfig, AutoFeatureExtractor, WhisperConfig
+from transformers import Seq2SeqTrainer
+
 from peft import LoraConfig, PeftModel, LoraModel, LoraConfig, get_peft_model
 import sys
 
@@ -39,25 +41,10 @@ from torch.nn.utils.rnn import pad_sequence
 from torch import nn
 
 sys.path.append('/project/relater/di/students/enes/ASR/RELATER/DE.EN.AR.UA.ES.ZH.TR.JA/MP3/ZH.EN/seame')
-from prepare_data import get_data
-
-sys.path.append('/home/eugan/repos/yapay-net/src/hug/net/')
+from prepare_data import get_data_seame
 
 
-def shift_tokens_right(input_ids: torch.Tensor, pad_token_id: int, decoder_start_token_id: int):
-    """
-    Shift input ids one token to the right.
-    """
-    shifted_input_ids = input_ids.new_zeros(input_ids.shape)
-    shifted_input_ids[:, 1:] = input_ids[:, :-1].clone()
-    shifted_input_ids[:, 0] = decoder_start_token_id
-
-    if pad_token_id is None:
-        raise ValueError("self.model.config.pad_token_id has to be defined.")
-    # replace possible -100 values in labels by `pad_token_id`
-    shifted_input_ids.masked_fill_(shifted_input_ids == -100, pad_token_id)
-
-    return shifted_input_ids
+# sys.path.append('/home/eugan/repos/yapay-net/src/hug/net/')
 
 
 @dataclass
@@ -120,7 +107,7 @@ class DataCollatorSpeechSeq2SeqWithPadding:
     def __call__(self, features: List[Dict[str, Union[List[int], torch.Tensor]]]) -> Dict[str, torch.Tensor]:
         # split inputs and labels since they have to be of different lengths and need different padding methods
         # first treat the audio inputs by simply returning torch tensors
-        sr = 16000
+        sr = 16000  # hardcored length
         audio_lst = list()
         label_lst = list()
         num_languages_lst = list()
@@ -148,7 +135,7 @@ class DataCollatorSpeechSeq2SeqWithPadding:
                 # print(el["audio"], flush=True)
                 continue
 
-            if not el.get("start", None) == None:
+            if not el.get("start", None) is None:
                 if int(float(el["start"])) >= 0 and int(float(el["end"])) > 0:
                     start = int(el["start"])
                     end = int(el["end"])
@@ -156,8 +143,11 @@ class DataCollatorSpeechSeq2SeqWithPadding:
 
             new_audio = self.audio_augment(audio, sample_rate=16000) if self.do_augment else audio
 
-            if len(new_audio) <= 20 * sr: audio = new_audio
-            if len(audio) > longest_audio: longest_audio = len(audio)
+            if len(new_audio) <= 20 * sr:
+                audio = new_audio
+
+            if len(audio) > longest_audio:
+                longest_audio = len(audio)
 
             audio_lst.append(audio)
             label_lst.append(el["transcript"])
@@ -184,12 +174,11 @@ class DataCollatorSpeechSeq2SeqWithPadding:
         # print(batch.input_features.shape)
         except Exception as e:
             print("======")
-            print(e)
             for el in features:
                 print(el)
                 audio = el["audio"]["array"]
                 print(len(audio), flush=True)
-            print(ASD)
+            raise e
 
         if self.do_augment:
             input_features = batch.input_features
@@ -201,40 +190,16 @@ class DataCollatorSpeechSeq2SeqWithPadding:
         #     #  print(batch["input_features"].shape)
         # labels_batch = self.processor.tokenizer(label_lst, src_lang=language, tgt_lang=language, return_tensors="pt", padding=True)
         labels_batch = self.text_processor(label_lst, return_tensors="pt", add_special_tokens=False, padding=True)
-        # print(label_lst)
-        # print(labels_batch)
-
-        # print("&&&&")
-        # input_features = [{"input_features": feature["input_features"]} for feature in features]
-        # batch = self.processor.feature_extractor.pad(input_features, return_tensors="pt")
-
-        # get the tokenized label sequences
-        # label_features = [{"input_ids": feature["labels"]} for feature in features]
-        # pad the labels to max length
-        # labels_batch = self.processor.tokenizer.pad(label_features, return_tensors="pt")
 
         # replace padding with -100 to ignore loss correctly
         labels = labels_batch["input_ids"].masked_fill(labels_batch.attention_mask.ne(1), -100)
-        # labels = self.randomize_positions(labels, num_languages_lst)
-        # print(labels)
-        # lang_labels_batch = self.get_language_for_token(label_lst, language_ids_lst, labels_batch.input_ids[:, 1:])
-        # lang_labels = lang_labels_batch["input_ids"].masked_fill(lang_labels_batch.attention_mask.ne(1), -100)
-        # print(lang_labels, flush=True)
-        #  lang_labels[:, :2] = -100
-        # print(lang_labels, flush=True)
 
         # if bos token is appended in previous tokenization step,
         # cut bos token here as it's append later anyways
-        # print(self.processor.tokenizer.bos_token_id)
-        # print(self.model_config.decoder_start_token_id)
-        # print(self.model_config.pad_token_id)
-        # if (labels[:, 0] == self.processor.tokenizer.bos_token_id).all().cpu().item():
-        # if (labels[:, 0] == self.model_config.decoder_start_token_id).all().cpu().item():
-        #    labels = labels[:, 1:]
-        # decoder_input_ids = shift_tokens_right(labels, self.model_config.pad_token_id, self.model_config.decoder_start_token_id)
         batch["decoder_input_ids"] = labels_batch.input_ids[:, :-1]
         batch["decoder_attention_mask"] = labels_batch.attention_mask[:, :-1]
         batch["labels"] = labels[:, 1:]
+
         # batch["lang_decoder_input_ids"] = lang_labels
         # batch["lang_labels"] = lang_labels
         # batch["only_lid_task"] = torch.Tensor([True])
@@ -271,13 +236,8 @@ task = "transcribe"
 
 processor = AutoProcessor.from_pretrained(model_name)
 
-# model_name = "./model/checkpoint-200"
 whisper_config = WhisperConfig.from_pretrained(model_name)
-# print(whisper_config)
-# model = WhisperForConditionalGenerationMT(whisper_config)#.from_pretrained(model_name)#, attn_implementation="flash_attention_2", torch_dtype=torch.float16)
-# model.load_pretrained(model_name)
 
-# config = WhisperConfig2.from_pretrained("openai/whisper-small", has_pre_proj_out=True)
 model = WhisperForConditionalGeneration.from_pretrained("openai/whisper-small")  # , config=config)
 model.config.forced_decoder_ids = None
 model.config.suppress_tokens = []
@@ -290,11 +250,6 @@ lora_config = LoraConfig(r=32, lora_alpha=64, target_modules=["q_proj", "v_proj"
                          bias="none")  # , modules_to_save=["pre_proj_out"])
 model.add_adapter(lora_config)
 
-# model = get_peft_model(model, lora_config)
-# model.print_trainable_parameters()
-
-# print(DAS)
-# Example usage with a simple model
 count_parameters(model)
 
 data_collator = DataCollatorSpeechSeq2SeqWithPadding(feature_extractor=processor.feature_extractor,
@@ -319,8 +274,6 @@ lr_scheduler = get_inverse_sqrt_schedule(
     optimizer=optimizer,
     num_warmup_steps=warmup_steps,
 )
-
-# model.freeze_encoder()
 
 training_args = Seq2SeqTrainingArguments(
     output_dir="./model",  # change to a repo name of your choice
@@ -358,7 +311,6 @@ training_args = Seq2SeqTrainingArguments(
     label_names=["labels"],
     # push_to_hub=True,
 )
-from transformers import Seq2SeqTrainer
 
 print("all_tr_dataset: {}".format(all_tr_dataset))
 print(type(all_tr_dataset))
@@ -385,7 +337,7 @@ trainer = MemSeq2SeqTrainer(
     callbacks=[EarlyStoppingCallback(
         early_stopping_patience=5)]
 )
-# with torch.backends.cuda.sdp_kernel(enable_flash=True, enable_math=False, enable_mem_efficient=False):
+
 trainer.train(resume_from_checkpoint=False)
 
 # if _model == model_name:
