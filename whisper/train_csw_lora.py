@@ -303,7 +303,7 @@ training_args = Seq2SeqTrainingArguments(
     warmup_steps=warmup_steps,
     # max_steps=180000,
     ddp_find_unused_parameters=True,
-    num_train_epochs=100,
+    num_train_epochs=1, # 100,
     gradient_checkpointing=False,
     bf16=True,
     # group_by_length=True,
@@ -350,21 +350,37 @@ eval_data_collator = DataCollatorSpeechSeq2SeqWithPadding(feature_extractor=proc
                                                           uid_mapper=dev_uid_mapper, dataset=all_dev_dataset,
                                                           do_augment=False)
 
+# class CustomEarlyStoppingCallback(EarlyStoppingCallback):
+#     def on_train_begin(self, args, state, control, **kwargs):
+#         super().on_train_begin(args, state, control, **kwargs)
+#         print("CustomEarlyStoppingCallback registered in stateful_callbacks.")
+#         state.stateful_callbacks["EarlyStoppingCallback"] = self  # Force register
+#         state.stateful_callbacks["CustomEarlyStoppingCallback"] = self  # Force register
+
+
+early_stopping = EarlyStoppingCallback(
+        early_stopping_patience=5)
+
+print(early_stopping)
+
 # trainer = Seq2SeqTrainer(
 trainer = MemSeq2SeqTrainer(
+    max_epochs=100,
+    eval_dataset=all_dev_dataset,
+    train_dataset_dict=all_tr_dataset,
     args=training_args,
     model=model,
-    train_dataset_dict=all_tr_dataset,
     train_dataset=train_dataset,
-    eval_dataset=all_dev_dataset,
     data_collator=data_collator,
     eval_data_collator=eval_data_collator,
     optimizers=(optimizer, lr_scheduler),
     # compute_metrics=compute_metrics,
     tokenizer=processor.feature_extractor,
-    callbacks=[EarlyStoppingCallback(
-        early_stopping_patience=5)]
+    callbacks=[early_stopping]
 )
+
+
+# trainer.state.stateful_callbacks['EarlyStoppingCallback'] = early_stopping
 
 trainer.train(resume_from_checkpoint=False)
 

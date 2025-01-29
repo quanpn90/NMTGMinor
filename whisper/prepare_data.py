@@ -453,3 +453,48 @@ def get_data_seame(debug=False):
     print(f"Dev data: {all_dev_dataset}")
 
     return datasets, all_dev_dataset
+
+
+def get_data_fisher(debug=False):
+    datasets = {}
+
+    dev_list = []
+
+    print("Loading Fisher...")
+    fisher_train = "fisher_train_cs_train-transcript.stm"
+    fisher_dev = "/project/asr_systems/LT2022/codeswitching/data/ESP-ENG/fisher/fisher_train_cs_dev-transcript.stm"
+    shuffle_fisher_train_dataset = load_asr_dataset(fisher_train, "es").shuffle(seed=42)
+    fisher_train_dataset = load_asr_dataset(fisher_train, "es")
+    fisher_dev_dataset = load_asr_dataset(fisher_dev, "es")
+
+    fisher_mono_train = "/project/asr_systems/LT2022/codeswitching/data/ESP-ENG/fisher/fisher_train_mono-transcript.stm"
+    shuffle_fisher_mono_train_dataset = load_asr_dataset(fisher_mono_train, "es").shuffle(seed=42)
+
+    fisher_all_train_dataset = concatenate_datasets([shuffle_fisher_train_dataset, shuffle_fisher_mono_train_dataset])
+
+    #  print("Loading TALCS ...")
+    #  talcs_train = "/project/asr_systems/LT2022/codeswitching/data/CMN-ENG/TALCS_corpus/train_set/train_time.stm"
+    #  talcs_dev = "/project/asr_systems/LT2022/codeswitching/data/CMN-ENG/TALCS_corpus/dev_set/dev_time.stm"
+    #  talcs_train_dataset = load_asr_dataset(talcs_train, "def").shuffle(seed=42)
+    #  talcs_dev_dataset = load_asr_dataset(talcs_dev, "def")
+
+    # csw_train_dataset = concatenate_datasets([shuffle_arzen_train_dataset, shuffle_seame_train_dataset, ascend_train_dataset, shuffle_fisher_train_dataset])
+    # csw_dev_dataset = concatenate_datasets([arzen_dev_dataset, seame_dev_dataset, ascend_dev_dataset, fisher_dev_dataset])
+
+    datasets["csw_train_dataset"] = fisher_all_train_dataset  #csw_train_dataset
+    datasets["shuffle_seame_train_dataset"] = shuffle_seame_train_dataset
+    #datasets["talcs_train_dataset"] = talcs_train_dataset
+
+    # dev_list.append(csw_dev_dataset)
+    #dev_list.append(talcs_dev_dataset)
+    dev_list.append(fisher_dev_dataset)
+    all_dev_dataset = concatenate_datasets(dev_list)
+
+    print(datasets)
+    print("===" * 20)
+    print(dev_list)
+
+    print("=====")
+    print(f"Dev data: {all_dev_dataset}")
+
+    return datasets, all_dev_dataset, fisher_dev_dataset
