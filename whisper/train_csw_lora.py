@@ -1,18 +1,21 @@
 import os
+import sys
+import re
+import warnings
+
 from datasets import load_dataset, ClassLabel, Features, Value, Dataset, Audio, concatenate_datasets, \
     interleave_datasets
 from pydub import AudioSegment
-from tqdm import tqdm
-import re
+
 from transformers import WhisperFeatureExtractor, WhisperTokenizer, WhisperProcessor, WhisperForConditionalGeneration, \
     AutoProcessor, AutoTokenizer, SeamlessM4TForSpeechToText, EarlyStoppingCallback, SeamlessM4Tv2ForSpeechToText
 from transformers import Seq2SeqTrainingArguments, SpeechEncoderDecoderConfig, AutoFeatureExtractor, WhisperConfig
 from transformers import Seq2SeqTrainer
 
 from peft import LoraConfig, PeftModel, LoraModel, LoraConfig, get_peft_model
-import sys
 
-sys.path.append('/home/eugan/repos/yapay-net/src/hug/trainer/')
+
+# sys.path.append('/home/eugan/repos/yapay-net/src/hug/trainer/')
 # from trainer_mem import MemSeq2SeqTrainer
 # from trainer_shuffle import MemSeq2SeqTrainer
 from trainers.trainer_shuffle import MemSeq2SeqTrainer
@@ -20,12 +23,11 @@ from trainers.trainer_shuffle import MemSeq2SeqTrainer
 # from wavlm.modeling_wavlm import
 # from whispermt import WhisperForConditionalGenerationMTOnlyNext as WhisperForConditionalGenerationMT
 # from whispermt import WhisperForConditionalGeneration2 as WhisperForConditionalGenerationMT
-from whispermt import WhisperConfig2
-from wavlm.configuration_wavlm import WavLMConfig
-from mbart.configuration_mbart import MBartConfig
-from wavlm.modeling_wavlm import WavLMModel, WavLMForSequenceClassification
-from mbart.modeling_mbart import MBartForCausalLM, MultiLangMBartForCausalLM
-from speech_encoder_decoder.modeling_speech_encoder_decoder import MultiDecoderSpeechEncoderDecoderModel
+# from wavlm.configuration_wavlm import WavLMConfig
+# from mbart.configuration_mbart import MBartConfig
+# from wavlm.modeling_wavlm import WavLMModel, WavLMForSequenceClassification
+# from mbart.modeling_mbart import MBartForCausalLM, MultiLangMBartForCausalLM
+# from speech_encoder_decoder.modeling_speech_encoder_decoder import MultiDecoderSpeechEncoderDecoderModel
 import random
 from audiomentations import Compose, AddGaussianNoise, TimeStretch, TimeMask
 import torchaudio.transforms as T
@@ -40,11 +42,18 @@ from transformers import get_inverse_sqrt_schedule
 from torch.nn.utils.rnn import pad_sequence
 from torch import nn
 
-sys.path.append('/project/relater/di/students/enes/ASR/RELATER/DE.EN.AR.UA.ES.ZH.TR.JA/MP3/ZH.EN/seame')
+# sys.path.append('/project/relater/di/students/enes/ASR/RELATER/DE.EN.AR.UA.ES.ZH.TR.JA/MP3/ZH.EN/seame')
 from prepare_data import get_data_seame
+from memory_efficient_whisper import create_whisper_model
 
+local_rank = int(os.environ.get("LOCAL_RANK", 0))
+device = torch.device(f"cuda:{local_rank}")
 
-# sys.path.append('/home/eugan/repos/yapay-net/src/hug/net/')
+if local_rank != 0:
+    # Suppress stdout and stderr for non-zero ranks
+    sys.stdout = open(os.devnull, "w")
+    # sys.stderr = open(os.devnull, "w")
+    warnings.filterwarnings("ignore")  # Ignore all warnings
 
 
 @dataclass
@@ -208,11 +217,16 @@ class DataCollatorSpeechSeq2SeqWithPadding:
         return batch
 
 
-all_tr_dataset, all_dev_dataset, concat_tr_dataset = get_data(debug=False)
+# TODO: add option to
+all_tr_dataset, all_dev_dataset = get_data_seame(debug=False)
 print("Training data: {}".format(all_tr_dataset))
 print("DEV data: {}".format(all_dev_dataset))
-training_uid_mapper = {key: idx for idx, key in enumerate(concat_tr_dataset["uid"])}
-dev_uid_mapper = {key: idx for idx, key in enumerate(all_dev_dataset["uid"])}
+
+# training_uid_mapper = {key: idx for idx, key in enumerate(concat_tr_dataset["uid"])}
+# dev_uid_mapper = {key: idx for idx, key in enumerate(all_dev_dataset["uid"])}
+
+training_uid_mapper = None
+dev_uid_mapper = None
 
 
 def count_parameters(model: nn.Module):
@@ -231,35 +245,40 @@ def count_parameters(model: nn.Module):
     return total_params, frozen_params
 
 
-model_name = "openai/whisper-small"
-task = "transcribe"
+# model_name = "openai/whisper-small"
+# task = "transcribe"
+
+# processor = AutoProcessor.from_pretrained(model_name)
+
+# whisper_config = WhisperConfig.from_pretrained(model_name)
+
+# model = WhisperForConditionalGeneration.from_pretrained("openai/whisper-small")  # , config=config)
+
+
+device = device if torch.cuda.is_available() else "cpu"
+torch_dtype = torch.bfloat16 if torch.cuda.is_available() else torch.float32
+model_name = "openai/whisper-large-v3-turbo"
+checkpoint_path = model_name
 
 processor = AutoProcessor.from_pretrained(model_name)
 
-whisper_config = WhisperConfig.from_pretrained(model_name)
+model = create_whisper_model(checkpoint_path, torch_dtype,
+                             attn_implementation="flash_attention_2",
+                             low_cpu_mem_usage=True,
+                             device_map={"": device})
 
-model = WhisperForConditionalGeneration.from_pretrained("openai/whisper-small")  # , config=config)
 model.config.forced_decoder_ids = None
 model.config.suppress_tokens = []
 print("pad_token_id: {}".format(model.config.pad_token_id))
 
 print(model)
-count_parameters(model)
+# count_parameters(model)
 
 lora_config = LoraConfig(r=32, lora_alpha=64, target_modules=["q_proj", "v_proj"], lora_dropout=0.05,
                          bias="none")  # , modules_to_save=["pre_proj_out"])
 model.add_adapter(lora_config)
 
 count_parameters(model)
-
-data_collator = DataCollatorSpeechSeq2SeqWithPadding(feature_extractor=processor.feature_extractor,
-                                                     text_processor=processor.tokenizer, model_config=model.config,
-                                                     uid_mapper=training_uid_mapper, dataset=concat_tr_dataset,
-                                                     do_augment=False)
-eval_data_collator = DataCollatorSpeechSeq2SeqWithPadding(feature_extractor=processor.feature_extractor,
-                                                          text_processor=processor.tokenizer, model_config=model.config,
-                                                          uid_mapper=dev_uid_mapper, dataset=all_dev_dataset,
-                                                          do_augment=False)
 
 learning_rate = 1e-3
 warmup_steps = 500
@@ -276,9 +295,9 @@ lr_scheduler = get_inverse_sqrt_schedule(
 )
 
 training_args = Seq2SeqTrainingArguments(
-    output_dir="./model",  # change to a repo name of your choice
+    output_dir="./model_seame",  # change to a repo name of your choice
     # logging_dir="/export/data1/data/eugan/ASR/model/DE.EN.AR.UA.ES.ZH.TR.JA/whisper.v3/log",
-    per_device_train_batch_size=15,
+    per_device_train_batch_size=8,
     gradient_accumulation_steps=4,  # increase by 2x for every 2x decrease in batch size
     learning_rate=learning_rate,  # 1e-3,#5e-5,
     warmup_steps=warmup_steps,
@@ -286,7 +305,7 @@ training_args = Seq2SeqTrainingArguments(
     ddp_find_unused_parameters=True,
     num_train_epochs=100,
     gradient_checkpointing=False,
-    fp16=True,
+    bf16=True,
     # group_by_length=True,
     length_column_name="duration",
     # optim="adafactor",
@@ -320,7 +339,16 @@ for _ in range(len(all_tr_dataset)):
     probability = Decimal(1) / Decimal(len(all_tr_dataset))
     probabilities.append(probability)
 train_dataset = interleave_datasets(list(all_tr_dataset.values()), probabilities, seed=42)
-print("TTTTT: {}".format(train_dataset))
+# print("TTTTT: {}".format(train_dataset))
+
+data_collator = DataCollatorSpeechSeq2SeqWithPadding(feature_extractor=processor.feature_extractor,
+                                                     text_processor=processor.tokenizer, model_config=model.config,
+                                                     uid_mapper=training_uid_mapper, dataset=train_dataset,
+                                                     do_augment=False)
+eval_data_collator = DataCollatorSpeechSeq2SeqWithPadding(feature_extractor=processor.feature_extractor,
+                                                          text_processor=processor.tokenizer, model_config=model.config,
+                                                          uid_mapper=dev_uid_mapper, dataset=all_dev_dataset,
+                                                          do_augment=False)
 
 # trainer = Seq2SeqTrainer(
 trainer = MemSeq2SeqTrainer(

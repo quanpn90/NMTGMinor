@@ -432,12 +432,14 @@ def get_data_seame(debug=False):
     dev_list = list()
 
     print("Loading SEAME...")
-    seame_train = "/project/asr_systems/LT2022/codeswitching/data/CMN-ENG/seame/train_clip.stm"
+    seame_train = "seame_train_clip.stm"
     seame_train_dataset = load_asr_dataset(seame_train, "def")
     tmp = seame_train_dataset.train_test_split(test_size=3000)
     seame_train_dataset = tmp["train"]
     seame_dev_dataset = tmp["test"]
     shuffle_seame_train_dataset = seame_train_dataset.shuffle(seed=181195)
+
+    datasets["shuffle_seame_train_dataset"] = shuffle_seame_train_dataset
 
     dev_list.append(seame_dev_dataset)
 

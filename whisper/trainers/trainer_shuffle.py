@@ -238,7 +238,7 @@ class MemSeq2SeqTrainer(Seq2SeqTrainer):
                 probabilities.append(probability)
             train_dataset = interleave_datasets(list(self.train_dataset_dict.values()), probabilities, seed=42+self.data_called_counter)
             print("Epoch: {} data_loader called: {}".format(self.state.epoch, self.data_called_counter))
-            print("TTTTT: {}".format(train_dataset))
+            # print("TTTTT: {}".format(train_dataset))
             self.train_dataset=train_dataset
         else:
             train_dataset = self.train_dataset
@@ -662,7 +662,7 @@ class MemSeq2SeqTrainer(Seq2SeqTrainer):
                     self.state.epoch = epoch + (step + 1 + steps_skipped) / steps_in_epoch
                     self.control = self.callback_handler.on_step_end(args, self.state, self.control)
 
-                    self._maybe_log_save_evaluate(tr_loss, grad_norm, model, trial, epoch, ignore_keys_for_eval)
+                    self._maybe_log_save_evaluate(tr_loss, grad_norm, model, trial, epoch, ignore_keys_for_eval, start_time)
                 else:
                     self.control = self.callback_handler.on_substep_end(args, self.state, self.control)
 
