@@ -113,7 +113,7 @@ def _cast_if_autocast_enabled(*args):
 
 def fast_layer_norm_affine(input, weight, bias, normalized_shape, eps=1e-5, memory_efficient=False):
     args = _cast_if_autocast_enabled(input, weight, bias, eps, memory_efficient)
-    with torch.cuda.amp.autocast(enabled=False):
+    with torch.amp.autocast('cuda', enabled=False):
         return FastLayerNormFN.apply(*args)
 
 
@@ -408,7 +408,7 @@ class MemoryEfficientWhisper(WhisperForConditionalGeneration):
 
     def state_dict(self, destination=None, prefix='', keep_vars=False):
         # Call the parent method to get the original state_dict
-        original_state_dict = super().state_dict(destination, prefix, keep_vars)
+        original_state_dict = super().state_dict(destination=destination, prefix=prefix, keep_vars=keep_vars)
         # Create a new OrderedDict excluding the parameters you don't want
         filtered_state_dict = OrderedDict(
             (k, v) for k, v in original_state_dict.items() if "teacher." not in k

@@ -2,6 +2,7 @@ import os
 import sys
 import re
 import warnings
+import argparse
 
 from datasets import load_dataset, ClassLabel, Features, Value, Dataset, Audio, concatenate_datasets, \
     interleave_datasets
@@ -14,20 +15,8 @@ from transformers import Seq2SeqTrainer
 
 from peft import LoraConfig, PeftModel, LoraModel, LoraConfig, get_peft_model
 
-
-# sys.path.append('/home/eugan/repos/yapay-net/src/hug/trainer/')
-# from trainer_mem import MemSeq2SeqTrainer
-# from trainer_shuffle import MemSeq2SeqTrainer
 from trainers.trainer_shuffle import MemSeq2SeqTrainer
 
-# from wavlm.modeling_wavlm import
-# from whispermt import WhisperForConditionalGenerationMTOnlyNext as WhisperForConditionalGenerationMT
-# from whispermt import WhisperForConditionalGeneration2 as WhisperForConditionalGenerationMT
-# from wavlm.configuration_wavlm import WavLMConfig
-# from mbart.configuration_mbart import MBartConfig
-# from wavlm.modeling_wavlm import WavLMModel, WavLMForSequenceClassification
-# from mbart.modeling_mbart import MBartForCausalLM, MultiLangMBartForCausalLM
-# from speech_encoder_decoder.modeling_speech_encoder_decoder import MultiDecoderSpeechEncoderDecoderModel
 import random
 from audiomentations import Compose, AddGaussianNoise, TimeStretch, TimeMask
 import torchaudio.transforms as T
@@ -37,13 +26,10 @@ import numpy as np
 from dataclasses import dataclass
 from typing import Any, Dict, List, Union
 from decimal import Decimal, getcontext
-from transformers import AdamW
 from transformers import get_inverse_sqrt_schedule
 from torch.nn.utils.rnn import pad_sequence
 from torch import nn
 
-# sys.path.append('/project/relater/di/students/enes/ASR/RELATER/DE.EN.AR.UA.ES.ZH.TR.JA/MP3/ZH.EN/seame')
-from prepare_data import get_data_seame
 from memory_efficient_whisper import create_whisper_model
 
 local_rank = int(os.environ.get("LOCAL_RANK", 0))
@@ -55,6 +41,10 @@ if local_rank != 0:
     # sys.stderr = open(os.devnull, "w")
     warnings.filterwarnings("ignore")  # Ignore all warnings
 
+parser = argparse.ArgumentParser(description='create_dataset_whisper')
+parser.add_argument('-dataset', required=True,
+                    help="Path to the dataset in huggingface format")
+args = parser.parse_args()
 
 @dataclass
 class DataCollatorSpeechSeq2SeqWithPadding:
@@ -218,15 +208,37 @@ class DataCollatorSpeechSeq2SeqWithPadding:
 
 
 # TODO: add option to
-all_tr_dataset, all_dev_dataset = get_data_seame(debug=False)
-print("Training data: {}".format(all_tr_dataset))
-print("DEV data: {}".format(all_dev_dataset))
+if args.dataset == 'seame':
+    from prepare_data import get_data_seame
+
+    all_tr_dataset, all_dev_dataset = get_data_seame(debug=False)
+    print("Training data: {}".format(all_tr_dataset))
+    print("DEV data: {}".format(all_dev_dataset))
+    training_uid_mapper = None
+    dev_uid_mapper = None
+elif args.dataset == 'fisher':
+    from prepare_data import get_data_fisher
+
+    all_tr_dataset, all_dev_dataset = get_data_fisher(debug=False)
+    print("Training data: {}".format(all_tr_dataset))
+    print("DEV data: {}".format(all_dev_dataset))
+    training_uid_mapper = None
+    dev_uid_mapper = None
+elif args.dataset == 'arzen':
+    from prepare_data import get_data_arzen
+
+    all_tr_dataset, all_dev_dataset = get_data_arzen(debug=False)
+    print("Training data: {}".format(all_tr_dataset))
+    print("DEV data: {}".format(all_dev_dataset))
+    training_uid_mapper = None
+    dev_uid_mapper = None
+else:
+    raise NotImplementedError("Unknown dataset: {}".format(args.dataset))
 
 # training_uid_mapper = {key: idx for idx, key in enumerate(concat_tr_dataset["uid"])}
 # dev_uid_mapper = {key: idx for idx, key in enumerate(all_dev_dataset["uid"])}
 
-training_uid_mapper = None
-dev_uid_mapper = None
+
 
 
 def count_parameters(model: nn.Module):
@@ -243,16 +255,6 @@ def count_parameters(model: nn.Module):
     print(f"Trainable parameters: {total_params - frozen_params}")
 
     return total_params, frozen_params
-
-
-# model_name = "openai/whisper-small"
-# task = "transcribe"
-
-# processor = AutoProcessor.from_pretrained(model_name)
-
-# whisper_config = WhisperConfig.from_pretrained(model_name)
-
-# model = WhisperForConditionalGeneration.from_pretrained("openai/whisper-small")  # , config=config)
 
 
 device = device if torch.cuda.is_available() else "cpu"
@@ -283,7 +285,7 @@ count_parameters(model)
 learning_rate = 1e-3
 warmup_steps = 500
 
-optimizer = AdamW(
+optimizer = torch.optim.AdamW(
     params=model.parameters(),
     lr=learning_rate,
     weight_decay=0.0005
@@ -294,22 +296,25 @@ lr_scheduler = get_inverse_sqrt_schedule(
     num_warmup_steps=warmup_steps,
 )
 
+output_dir = "./model_" + args.dataset
+
+#TODO: logging_dir
 training_args = Seq2SeqTrainingArguments(
-    output_dir="./model_seame",  # change to a repo name of your choice
+    output_dir=output_dir,  # change to a repo name of your choice
     # logging_dir="/export/data1/data/eugan/ASR/model/DE.EN.AR.UA.ES.ZH.TR.JA/whisper.v3/log",
     per_device_train_batch_size=8,
     gradient_accumulation_steps=4,  # increase by 2x for every 2x decrease in batch size
     learning_rate=learning_rate,  # 1e-3,#5e-5,
     warmup_steps=warmup_steps,
     # max_steps=180000,
-    ddp_find_unused_parameters=True,
-    num_train_epochs=1, # 100,
+    ddp_find_unused_parameters=False,
+    num_train_epochs=100,
     gradient_checkpointing=False,
     bf16=True,
     # group_by_length=True,
     length_column_name="duration",
     # optim="adafactor",
-    evaluation_strategy="steps",
+    eval_strategy="steps",
     predict_with_generate=True,
     generation_max_length=225,
     save_total_limit=1,
@@ -332,7 +337,7 @@ training_args = Seq2SeqTrainingArguments(
 )
 
 print("all_tr_dataset: {}".format(all_tr_dataset))
-print(type(all_tr_dataset))
+# print(type(all_tr_dataset))
 getcontext().prec = 50
 probabilities = list()
 for _ in range(len(all_tr_dataset)):
@@ -361,18 +366,15 @@ eval_data_collator = DataCollatorSpeechSeq2SeqWithPadding(feature_extractor=proc
 early_stopping = EarlyStoppingCallback(
         early_stopping_patience=5)
 
-print(early_stopping)
-
 # trainer = Seq2SeqTrainer(
 trainer = MemSeq2SeqTrainer(
-    max_epochs=100,
-    eval_dataset=all_dev_dataset,
     train_dataset_dict=all_tr_dataset,
+    eval_data_collator=eval_data_collator,
     args=training_args,
     model=model,
     train_dataset=train_dataset,
+    eval_dataset=all_dev_dataset,
     data_collator=data_collator,
-    eval_data_collator=eval_data_collator,
     optimizers=(optimizer, lr_scheduler),
     # compute_metrics=compute_metrics,
     tokenizer=processor.feature_extractor,

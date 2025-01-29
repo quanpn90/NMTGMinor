@@ -38,6 +38,7 @@ from memory_efficient_whisper import (MemoryEfficientWhisper,
 
 from batch_ensemble_whisper import create_batch_ensemble_whisper
 
+
 # Step 1: Parsing arguments
 
 parser = argparse.ArgumentParser(description='create_dataset_whisper')
