@@ -245,6 +245,7 @@ class MemoryEfficientWhisper(WhisperForConditionalGeneration):
 
         self.teacher = None
         self.teacher_distillation = 0
+        self.label_smoothing = 0
 
     def forward(
             self,
@@ -360,11 +361,13 @@ class MemoryEfficientWhisper(WhisperForConditionalGeneration):
 
             labels = labels.to(lm_logits.device).reshape(-1)
             logits = lm_logits.view(-1, self.config.vocab_size)
+            label_smoothing = self.label_smoothing if self.training else 0.0
 
             if fast_xentropy:
+
                 half_to_float = (logits.dtype == torch.float16) or (logits.dtype == torch.bfloat16)
                 loss = softmax_xentropy(logits, labels,
-                                        0.0,  # smoothing
+                                        label_smoothing,  # smoothing
                                         -100,  # padding
                                         half_to_float)
                 bsz = labels.size(0)
@@ -373,7 +376,7 @@ class MemoryEfficientWhisper(WhisperForConditionalGeneration):
             else:
                 loss_fct = CrossEntropyLoss(ignore_index=-100,
                                             reduction='mean',
-                                            label_smoothing=0.0)
+                                            label_smoothing=label_smoothing)
                 # move labels to correct device to enable PP
                 loss = loss_fct(logits, labels)
                 ce_loss = loss

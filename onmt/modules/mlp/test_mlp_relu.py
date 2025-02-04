@@ -20,6 +20,7 @@ except (ModuleNotFoundError, ImportError) as e:
 
 torch.set_float32_matmul_precision('high')
 
+
 class MlpReluFunction(torch.autograd.Function):
     @staticmethod
     # @custom_fwd(cast_inputs=torch.float16)
@@ -74,7 +75,6 @@ if fused_mlp_relu:
     mlp_relu_recompute_function = MlpReluRecomputeFunction.apply
 else:
     mlp_relu_recompute_function = None
-
 
 # def foo(x, y):
 #     a = torch.sin(x)
@@ -196,7 +196,8 @@ if __name__ == '__main__':
 
                 for _ in range(1):
                     bsz = random.randint(64, batch_size // 8) * 8
-                    test_input = torch.empty(seq_len, bsz, mlp_sizes[0], device="cuda").uniform_(-1., 1.).requires_grad_()
+                    test_input = torch.empty(seq_len, bsz, mlp_sizes[0], device="cuda").uniform_(-1.,
+                                                                                                 1.).requires_grad_()
                     ref_input = test_input.clone().detach().requires_grad_()
                     mlp_out, dropout_mask = mlp(test_input)
                     ref_out = ref_mlp.forward(ref_input, dropout_mask, ref=True)

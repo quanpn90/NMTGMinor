@@ -185,7 +185,7 @@ DEFAULT_CALLBACKS = [DefaultFlowCallback]
 DEFAULT_PROGRESS_CALLBACK = ProgressCallback
 
 if is_in_notebook():
-    from .utils.notebook import NotebookProgressCallback
+    from whisper.utils import NotebookProgressCallback
 
     DEFAULT_PROGRESS_CALLBACK = NotebookProgressCallback
 
