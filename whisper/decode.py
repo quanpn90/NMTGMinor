@@ -54,6 +54,9 @@ parser.add_argument('-output_file', required=False, default="",
 parser.add_argument('-target_file', required=False, default="",
                     help="Path to the reference file. If provided word error rate will be computed")
 
+parser.add_argument('-no_progress_bar', action='store_true',
+                    help="Use spec augmentation")
+
 args = parser.parse_args()
 
 test_path = args.test_stm
@@ -90,7 +93,7 @@ model = create_whisper_model(model_path, torch_dtype,
                              low_cpu_mem_usage=True,
                              device_map={"": device})
 
-if args.lora_path is not None:
+if args.lora_path is not None and len(args.lora_path) > 0:
     print("[INFO] Loading LORA weights from {}".format(args.lora_path))
     from peft import PeftModel
     lora_weights_path = args.lora_path
@@ -170,7 +173,9 @@ print(language_tokens)
 language_ids = [processor.tokenizer.convert_tokens_to_ids(x) for x in language_tokens]
 print(language_ids)
 
-for idx, batch_ in tqdm(enumerate(data_loader), total=len(data_loader)):
+no_progress_bar = args.no_progress_bar
+
+for idx, batch_ in tqdm(enumerate(data_loader), total=len(data_loader), disable=no_progress_bar):
     path_lst = batch_.pop("paths")
     target = batch_.pop("tgt_txt")
     uid = batch_.pop("uid")

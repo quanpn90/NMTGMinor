@@ -159,7 +159,9 @@ def load_asr_dataset(file_path, language):
     skipped = 0
     for line in tqdm(lines):
         parts = line.strip().split('\t')
-        if len(parts) < 6: skipped += 1; continue
+        if len(parts) < 6:
+            # print(line)
+            skipped += 1; continue
         try:
             uid, wavpath, start, end, duration, transcript = parts
         except Exception as e:

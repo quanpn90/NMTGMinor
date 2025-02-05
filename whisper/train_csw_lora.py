@@ -11,9 +11,9 @@ from pydub import AudioSegment
 from transformers import WhisperFeatureExtractor, WhisperTokenizer, WhisperProcessor, WhisperForConditionalGeneration, \
     AutoProcessor, AutoTokenizer, SeamlessM4TForSpeechToText, EarlyStoppingCallback, SeamlessM4Tv2ForSpeechToText
 from transformers import Seq2SeqTrainingArguments, SpeechEncoderDecoderConfig, AutoFeatureExtractor, WhisperConfig
-from transformers import Seq2SeqTrainer
-
+from transformers import Seq2SeqTrainer, TrainerCallback
 from peft import LoraConfig, PeftModel, LoraModel, LoraConfig, get_peft_model
+
 
 from trainers.trainer_shuffle import MemSeq2SeqTrainer
 
@@ -55,6 +55,8 @@ parser.add_argument('-spec_augment', action='store_true',
                     help="Use spec augmentation")
 parser.add_argument('-label_smoothing', type=float, default=0.1,
                     help="""Label smoothing""")
+parser.add_argument('-no_progress_bar', action='store_true',
+                    help="Use spec augmentation")
 args = parser.parse_args()
 
 
@@ -206,6 +208,7 @@ training_args = Seq2SeqTrainingArguments(
     greater_is_better=False,
     remove_unused_columns=False,
     label_names=["labels"],
+    disable_tqdm=args.no_progress_bar,
     # push_to_hub=True,
 )
 
@@ -229,7 +232,14 @@ eval_data_collator = DataCollatorSpeechSeq2SeqWithPadding(feature_extractor=proc
                                                           do_augment=False)
 
 early_stopping = EarlyStoppingCallback(
-    early_stopping_patience=5)
+    early_stopping_patience=10)
+
+class LoadFullModelCallback(TrainerCallback):
+    def on_train_end(self, args, state, control, model=None, **kwargs):
+        if args.load_best_model_at_end and state.best_model_checkpoint:
+            print(f"Loading best model from {state.best_model_checkpoint}")
+            model = PeftModel.from_pretrained(model, state.best_model_checkpoint)
+            model.save_pretrained(state.best_model_checkpoint, save_adapter=False)
 
 # trainer = Seq2SeqTrainer(
 trainer = MemSeq2SeqTrainer(
@@ -243,7 +253,7 @@ trainer = MemSeq2SeqTrainer(
     optimizers=(optimizer, lr_scheduler),
     # compute_metrics=compute_metrics,
     tokenizer=processor.feature_extractor,
-    callbacks=[early_stopping]
+    callbacks=[early_stopping, LoadFullModelCallback()]
 )
 
 # trainer.state.stateful_callbacks['EarlyStoppingCallback'] = early_stopping

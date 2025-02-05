@@ -15,6 +15,9 @@ from torch.utils.cpp_extension import CUDA_HOME
 # ninja build does not work unless include_dirs are abs path
 this_dir = os.path.dirname(os.path.abspath(__file__))
 
+# note: export CFLAGS="-O3 -march=native" might be necessary
+# note: set TORCH_CUDA_ARCH_LIST
+
 
 def get_cuda_bare_metal_version(cuda_dir):
     raw_output = subprocess.check_output([cuda_dir + "/bin/nvcc", "-V"], universal_newlines=True)
@@ -109,6 +112,15 @@ version_dependent_macros = version_ge_1_1 + version_ge_1_3 + version_ge_1_5
 
 bare_metal_minor, bare_metal_major = check_cuda_torch_binary_vs_bare_metal(CUDA_HOME)
 print("GENERATOR FLAG:", generator_flag)
+
+
+ext_modules.append(
+    CUDAExtension(name='fused_mlp_relu',
+                  sources=['mlp/mlp_relu.cpp',
+                           'mlp/mlp_relu_cuda.cu'],
+                  extra_compile_args={'cxx': ['-O3'] + version_dependent_macros,
+                                      'nvcc': ['-O3'] + version_dependent_macros + generator_flag}))
+
 
 ext_modules.append(
     CUDAExtension(name='fast_layer_norm_cuda',
